@@ -598,35 +598,37 @@ export function App() {
               <CaiReportes gestion={2026} />
             </Suspense>
           ) : (
-            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg">
-              <div className="border-b border-slate-200 bg-white px-5 py-5 sm:px-7">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cai-700">Grupo activo</p>
-                <h2 className="mt-1 text-xl font-bold text-slate-900 sm:text-2xl">
-                  {isLoadingGrupos ? 'Cargando grupos…' : grupoActivo?.nombre ?? 'Seleccione un grupo'}
-                </h2>
-                {grupoActivo && (
-                  <p className="mt-1 text-sm text-slate-500">
-                    Seleccione un indicador para consultar y registrar sus resultados.
-                  </p>
-                )}
-              </div>
-              <div className="p-5 sm:p-7">
-                {grupoActivoId ? (
-                  <CaiRegistroForm
-                    key={`${session.establecimientoId}-${grupoActivoId}`}
-                    establecimientoId={session.establecimientoId}
-                    grupoId={grupoActivoId}
-                    gestion={2026}
-                  />
-                ) : (
-                  <p className="text-sm text-slate-500">
-                    {isLoadingGrupos
-                      ? 'Cargando el catálogo de grupos de indicadores…'
-                      : 'No hay grupos disponibles para mostrar.'}
-                  </p>
-                )}
-              </div>
-            </section>
+            <div className="mx-auto w-full max-w-5xl">
+              <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg">
+                <div className="border-b border-slate-200 bg-white px-5 py-5 sm:px-7">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cai-700">Grupo activo</p>
+                  <h2 className="mt-1 text-xl font-bold text-slate-900 sm:text-2xl">
+                    {isLoadingGrupos ? 'Cargando grupos…' : grupoActivo?.nombre ?? 'Seleccione un grupo'}
+                  </h2>
+                  {grupoActivo && (
+                    <p className="mt-1 text-sm text-slate-500">
+                      Seleccione un indicador para consultar y registrar sus resultados.
+                    </p>
+                  )}
+                </div>
+                <div className="p-5 sm:p-7">
+                  {grupoActivoId ? (
+                    <CaiRegistroForm
+                      key={`${session.establecimientoId}-${grupoActivoId}`}
+                      establecimientoId={session.establecimientoId}
+                      grupoId={grupoActivoId}
+                      gestion={2026}
+                    />
+                  ) : (
+                    <p className="text-sm text-slate-500">
+                      {isLoadingGrupos
+                        ? 'Cargando el catálogo de grupos de indicadores…'
+                        : 'No hay grupos disponibles para mostrar.'}
+                    </p>
+                  )}
+                </div>
+              </section>
+            </div>
           )}
 
           <footer className="py-6 text-center text-xs text-slate-400">

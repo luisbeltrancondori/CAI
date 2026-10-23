@@ -200,8 +200,8 @@ function CoverageTooltip({
   if (!active || !row) return null
 
   const values = [
-    { label: firstSemesterLabel, value: row.porcentajeJunio, color: '#f59e0b' },
-    { label: incrementalLabel, value: row.porcentajeIncremento, color: '#10b981' },
+    { label: firstSemesterLabel, value: row.porcentajeJunio, color: '#2F6B3F' },
+    { label: incrementalLabel, value: row.porcentajeIncremento, color: '#D32E3A' },
     { label: 'Cobertura Total Acumulada', value: row.cobertura, color: '#334155' },
   ]
 
@@ -774,7 +774,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={reporte.rows}
-                margin={{ top: 30, right: 24, left: 4, bottom: 70 }}
+                margin={{ top: 30, right: 100, left: 4, bottom: 70 }}
                 barCategoryGap="28%"
               >
                 <CartesianGrid stroke="#e2e8f0" strokeDasharray="4 4" vertical={false} />
@@ -819,7 +819,8 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                       value: `Meta: ${formatPercentage(reporte.metaInstitucional)}`,
                       fill: '#dc2626',
                       fontSize: 11,
-                      position: 'top',
+                      position: 'right',
+                      offset: 12,
                     }}
                   />
                 )}
@@ -827,8 +828,9 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                   name={firstSemesterChartLabel}
                   dataKey="porcentajeJunio"
                   stackId="a"
-                  fill="#f59e0b"
+                  fill="#2F6B3F"
                   radius={[0, 0, 0, 0]}
+                  barSize={48}
                   maxBarSize={48}
                 >
                   <LabelList
@@ -845,8 +847,9 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                   name={incrementalLabel}
                   dataKey="porcentajeIncremento"
                   stackId="a"
-                  fill="#10b981"
+                  fill="#D32E3A"
                   radius={[4, 4, 0, 0]}
+                  barSize={48}
                   maxBarSize={48}
                 >
                   <LabelList
