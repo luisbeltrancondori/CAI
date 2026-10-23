@@ -3,8 +3,10 @@ import {
   Activity,
   CircleCheck,
   Download,
+  Eye,
   Target,
   Users,
+  X,
   type LucideIcon,
 } from 'lucide-react'
 import {
@@ -233,19 +235,26 @@ function MetricCard({
   value,
   detail,
   accent,
+  breakdown,
 }: {
   icon: LucideIcon
   label: string
   value: string
   detail: string
   accent: string
+  breakdown?: {
+    firstLabel: string
+    firstValue: number
+    incrementLabel: string
+    incrementValue: number
+  }
 }) {
   const Icon = icon
 
   return (
     <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0 flex-1">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
           <p className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{value}</p>
           <p className="mt-1 text-xs text-slate-500">{detail}</p>
@@ -254,6 +263,22 @@ function MetricCard({
           <Icon size={21} strokeWidth={1.8} />
         </span>
       </div>
+      {breakdown && (
+        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-100 pt-3">
+          <span className="inline-flex items-center gap-2 text-xs">
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-amber-500" aria-hidden="true" />
+            <span className="text-slate-500">{breakdown.firstLabel}</span>
+            <span className="font-semibold text-amber-600">{formatPercentage(breakdown.firstValue)}</span>
+          </span>
+          <span className="inline-flex items-center gap-2 text-xs">
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
+            <span className="text-slate-500">{breakdown.incrementLabel}</span>
+            <span className="font-semibold text-emerald-600">
+              +{formatPercentage(breakdown.incrementValue)}
+            </span>
+          </span>
+        </div>
+      )}
     </article>
   )
 }
@@ -267,6 +292,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
   const [establecimientoId, setEstablecimientoId] = useState('')
   const [grupoId, setGrupoId] = useState('')
   const [indicadorId, setIndicadorId] = useState('')
+  const [establecimientoModal, setEstablecimientoModal] = useState<Pick<Establecimiento, 'id' | 'nombre'> | null>(null)
   const [mes, setMes] = useState(12)
   const [isLoadingCatalogos, setIsLoadingCatalogos] = useState(true)
   const [isLoadingIndicadores, setIsLoadingIndicadores] = useState(false)
@@ -383,7 +409,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
               .from('cai_registros_mensuales')
               .select('establecimiento_id, indicador_id, mes, valor_numerador')
               .eq('gestion', gestion)
-              .lte('mes', Math.max(mes, 6))
+              .lte('mes', 12)
               .in('indicador_id', indicadorIds)
             if (establecimientoId) query = query.eq('establecimiento_id', establecimientoId)
             return await query.range(from, to)
@@ -466,6 +492,12 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
     const atendidosTotal = registros
       .filter((item) => item.mes <= mes)
       .reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
+    const atendidosPrimerPeriodo = registros
+      .filter((item) => item.mes <= Math.min(mes, 6))
+      .reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
+    const atendidosIncremento = registros
+      .filter((item) => item.mes > 6 && item.mes <= mes)
+      .reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
     const metaTotalPonderada = configuraciones.reduce(
       (total, item) =>
         total +
@@ -478,6 +510,10 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
       poblacionTotal,
       atendidosTotal,
       coberturaPromedio: poblacionTotal > 0 ? (atendidosTotal / poblacionTotal) * 100 : 0,
+      porcentajePrimerPeriodo:
+        poblacionTotal > 0 ? (atendidosPrimerPeriodo / poblacionTotal) * 100 : 0,
+      porcentajeIncremento:
+        poblacionTotal > 0 ? (atendidosIncremento / poblacionTotal) * 100 : 0,
       metaInstitucional: poblacionTotal > 0 ? metaTotalPonderada / poblacionTotal : null,
       cumplimientoMetaInstitucional:
         poblacionTotal > 0 && metaTotalPonderada > 0
@@ -485,6 +521,35 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           : null,
     }
   }, [establecimientoId, establecimientos, configuraciones, registros, mes])
+
+  const datosMensualesModal = useMemo(() => {
+    if (!establecimientoModal) return []
+
+    let atendidosAcumulados = 0
+    return MESES.slice(0, mes).map((nombre, index) => {
+      atendidosAcumulados += registros
+        .filter(
+          (registro) =>
+            registro.establecimiento_id === establecimientoModal.id &&
+            registro.mes === index + 1,
+        )
+        .reduce((total, registro) => total + Number(registro.valor_numerador || 0), 0)
+
+      return {
+        mes: nombre.slice(0, 3),
+        atendidos: atendidosAcumulados,
+      }
+    })
+  }, [establecimientoModal, configuraciones, registros, mes])
+
+  useEffect(() => {
+    if (!establecimientoModal) return
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setEstablecimientoModal(null)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [establecimientoModal])
 
   function handleGroupChange(value: string) {
     setGrupoId(value)
@@ -658,6 +723,12 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           value={formatPercentage(reporte.coberturaPromedio)}
           detail="Alcanzados sobre población programada"
           accent="bg-violet-50 text-violet-700"
+          breakdown={{
+            firstLabel: mes < 6 ? `Logrado Ene–${MESES[mes - 1]}` : 'Logrado a Junio',
+            firstValue: reporte.porcentajePrimerPeriodo,
+            incrementLabel: mes > 6 ? `Inc. Jul–${MESES[mes - 1]}` : 'Inc. Jul–Dic',
+            incrementValue: reporte.porcentajeIncremento,
+          }}
         />
         <MetricCard
           icon={Target}
@@ -809,7 +880,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           <p className="mt-1 text-sm text-slate-500">Cobertura acumulada hasta {MESES[mes - 1]} de {gestion}.</p>
         </div>
         <div className="overflow-x-auto">
-          <table className="min-w-[1180px] divide-y divide-slate-200 text-sm">
+          <table className="min-w-[1240px] divide-y divide-slate-200 text-sm">
             <thead className="bg-[#0d4859] text-left text-xs uppercase tracking-wide text-white">
               <tr>
                 <th scope="col" className="min-w-48 px-4 py-3 font-bold">Centro de Salud</th>
@@ -833,6 +904,9 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                 </th>
                 <th scope="col" className="min-w-36 bg-[#0d4859] px-4 py-3 text-center font-bold">
                   Estado / Semáforo
+                </th>
+                <th scope="col" className="min-w-20 bg-[#0d4859] px-4 py-3 text-center font-bold">
+                  Ver
                 </th>
               </tr>
             </thead>
@@ -877,12 +951,22 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                         {semaforo.shortLabel}
                       </span>
                     </td>
+                    <td className="whitespace-nowrap px-4 py-4 text-center">
+                      <button
+                        type="button"
+                        aria-label={`Ver comportamiento mensual de ${row.nombre}`}
+                        onClick={() => setEstablecimientoModal({ id: row.id, nombre: row.nombre })}
+                        className="inline-flex items-center justify-center rounded-lg p-2 text-slate-500 transition hover:bg-emerald-50 hover:text-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
+                      >
+                        <Eye size={18} aria-hidden="true" />
+                      </button>
+                    </td>
                   </tr>
                 )
               })}
               {reporte.rows.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="px-5 py-10 text-center text-sm text-slate-500">
+                  <td colSpan={11} className="px-5 py-10 text-center text-sm text-slate-500">
                     No hay datos para mostrar con los filtros seleccionados.
                   </td>
                 </tr>
@@ -891,6 +975,66 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           </table>
         </div>
       </section>
+      {establecimientoModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setEstablecimientoModal(null)
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="monthly-coverage-title"
+            className="w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-2xl"
+          >
+            <header className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-7">
+              <div>
+                <h2 id="monthly-coverage-title" className="text-lg font-bold text-slate-900 sm:text-xl">
+                  {establecimientoModal.nombre}
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Atenciones acumuladas hasta {MESES[mes - 1]} de {gestion}
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Cerrar gráfico mensual"
+                onClick={() => setEstablecimientoModal(null)}
+                className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-cai-600"
+              >
+                <X size={20} aria-hidden="true" />
+              </button>
+            </header>
+            <div className="h-[360px] p-4 sm:h-[460px] sm:p-6">
+              {isLoadingDatos ? (
+                <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                  Cargando datos mensuales…
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={datosMensualesModal} margin={{ top: 20, right: 20, left: 4, bottom: 8 }}>
+                    <CartesianGrid stroke="#e2e8f0" strokeDasharray="4 4" vertical={false} />
+                    <XAxis dataKey="mes" tick={{ fill: '#475569', fontSize: 12 }} />
+                    <YAxis
+                      allowDecimals={false}
+                      tickFormatter={(value: number) => formatNumber(value)}
+                      tick={{ fill: '#64748b', fontSize: 12 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      formatter={(value) => [formatNumber(Number(value)), 'Atendidos acumulados']}
+                      labelFormatter={(label) => `Mes: ${label}`}
+                    />
+                    <Bar dataKey="atendidos" name="Atendidos acumulados" fill="#10b981" radius={[5, 5, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   )
 }
