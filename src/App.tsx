@@ -329,34 +329,40 @@ function Sidebar({
 function InstitutionalBanner() {
   return (
     <header
-      aria-label="Identidad institucional"
-      className="mb-6 flex flex-wrap items-center justify-between gap-5 rounded-2xl bg-gradient-to-r from-[#0a2e35] via-[#0d3c45] to-[#134e5a] px-5 py-5 shadow-lg sm:px-7"
-    >
-      <div className="flex min-w-0 items-center gap-4">
-        <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-white p-2 shadow-sm">
-          <img
-            src={logoGam}
-            alt="Logotipo del Gobierno Autónomo Municipal de Montero"
-            className="h-full w-full object-contain"
-          />
-        </div>
-        <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-200 sm:text-sm">
-            Gobierno Autónomo Municipal de Montero
-          </p>
-          <p className="mt-1 text-sm font-medium text-white sm:text-base">
-            Secretaría Municipal de Salud
-          </p>
-        </div>
-      </div>
-      <div className="flex shrink-0 items-center rounded-xl bg-white px-4 py-2.5 shadow-sm">
-        <img
-          src={logoSus}
-          alt="Insignia del Sistema Único de Salud"
-          className="h-10 w-auto object-contain sm:h-12"
-        />
-      </div>
-    </header>
+  aria-label="Identidad institucional"
+  className="mb-6 flex flex-wrap items-center justify-between gap-5 rounded-2xl bg-gradient-to-r from-[#0a2e35] via-[#0d3c45] to-[#134e5a] px-5 py-5 shadow-lg sm:px-7"
+>
+  {/* 1. Logo Izquierdo */}
+  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-white p-2 shadow-sm">
+    <img
+      src={logoGam}
+      alt="Logotipo del Gobierno Autónomo Municipal de Montero"
+      className="h-full w-full object-contain"
+    />
+  </div>
+
+  {/* 2. Texto Centrado que ocupa el espacio intermedio */}
+  <div className="flex-1 text-center px-4 min-w-0">
+    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-200 sm:text-sm">
+      Gobierno Autónomo Municipal de Montero
+    </p>
+    <p className="mt-1 text-sm font-medium text-white sm:text-base">
+      Secretaría Municipal de Salud
+    </p>
+    <p className="mt-1 text-sm font-medium text-white sm:text-base">
+      Comité de Análisis de Información (CAI)
+    </p>
+  </div>
+
+  {/* 3. Logo Derecho */}
+  <div className="flex shrink-0 items-center rounded-xl bg-white px-4 py-2.5 shadow-sm">
+    <img
+      src={logoSus}
+      alt="Insignia del Sistema Único de Salud"
+      className="h-10 w-auto object-contain sm:h-12"
+    />
+  </div>
+</header>
   )
 }
 
