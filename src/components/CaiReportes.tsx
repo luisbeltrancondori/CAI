@@ -679,6 +679,17 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
     isProductivityIndicator,
   ])
 
+  const coverageYAxisMax = useMemo(() => {
+    if (!hasRequiredSelection || isProductivityIndicator) return 100
+
+    const highestCoverage = reporte.rows.reduce(
+      (highest, row) => Math.max(highest, row.cobertura),
+      0,
+    )
+    const highestValue = Math.max(highestCoverage, reporte.metaInstitucional ?? 0)
+    return highestValue > 0 ? Math.ceil(highestValue / 10) * 10 : 100
+  }, [hasRequiredSelection, isProductivityIndicator, reporte.rows, reporte.metaInstitucional])
+
   const datosMensualesModal = useMemo(() => {
     if (!establecimientoModal) return []
 
@@ -1023,7 +1034,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                   tick={{ fill: '#64748b', fontSize: 11 }}
                   axisLine={false}
                   tickLine={false}
-                  domain={isProductivityIndicator ? [0, 1] : [0, (max: number) => Math.max(100, Math.ceil(max / 10) * 10)]}
+                  domain={isProductivityIndicator ? [0, 1] : [0, coverageYAxisMax]}
                   ticks={isProductivityIndicator ? [0, 0.25, 0.5, 0.75, 1] : undefined}
                   tickFormatter={(value: number) =>
                     isProductivityIndicator ? formatProductivityRate(value) : String(value)
