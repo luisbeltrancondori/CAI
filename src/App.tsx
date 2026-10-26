@@ -1,8 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import {
   BarChart3,
-  ChevronDown,
-  ChevronRight,
   ClipboardList,
   Home,
   LogOut,
@@ -26,12 +24,9 @@ const CaiReportes = lazy(() =>
 )
 
 type SidebarProps = {
-  grupos: Grupo[]
-  grupoActivoId: string
   activeView: ActiveView
-  isLoading: boolean
-  onSelect: (groupId: string) => void
   onHome: () => void
+  onOpenRegistration: () => void
   onOpenReports: () => void
   onLogout: () => void
   session: CaiSession
@@ -73,12 +68,9 @@ function readStoredSession(): CaiSession | null {
 }
 
 function Sidebar({
-  grupos,
-  grupoActivoId,
   activeView,
-  isLoading,
-  onSelect,
   onHome,
+  onOpenRegistration,
   onOpenReports,
   onLogout,
   session,
@@ -87,9 +79,6 @@ function Sidebar({
   isCollapsed = false,
   onToggleCollapsed,
 }: SidebarProps) {
-  const [isAccordionOpen, setIsAccordionOpen] = useState(true)
-  const [openGroup, setOpenGroup] = useState<string | null>(null)
-
   return (
     <aside
       className={`flex flex-col bg-[#0d4859] text-white shadow-xl transition-all duration-300 ${
@@ -180,10 +169,9 @@ function Sidebar({
           <button
             type="button"
             aria-current={activeView === 'registro' ? 'page' : undefined}
-            onClick={() => (grupoActivoId ? onSelect(grupoActivoId) : undefined)}
-            disabled={!grupoActivoId}
+            onClick={onOpenRegistration}
             title={isCollapsed ? 'Registro de datos' : undefined}
-            className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-white disabled:cursor-not-allowed disabled:opacity-60 ${
+            className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-white ${
               activeView === 'registro'
                 ? 'bg-white font-semibold text-[#0d4859] shadow-sm'
                 : 'text-teal-50 hover:bg-white/10'
@@ -207,100 +195,6 @@ function Sidebar({
             {!isCollapsed && <span>Reportes de Cobertura</span>}
           </button>
         </div>
-        {!isCollapsed && (
-          <>
-            <button
-              type="button"
-              aria-expanded={isAccordionOpen}
-              aria-controls="indicator-groups"
-              onClick={() => setIsAccordionOpen((open) => !open)}
-              className="flex w-full items-center justify-between px-3 pb-3 text-left text-xs font-semibold uppercase tracking-[0.16em] text-teal-200 focus:outline-none focus:ring-2 focus:ring-white"
-            >
-              <span>Grupos de indicadores</span>
-              <ChevronDown
-                size={16}
-                aria-hidden="true"
-                className={`transition-transform duration-300 ${isAccordionOpen ? 'rotate-180' : ''}`}
-              />
-            </button>
-            {isAccordionOpen && (
-              <div id="indicator-groups">
-                {isLoading ? (
-                  <p className="px-3 py-2 text-sm text-teal-100">Cargando grupos…</p>
-                ) : grupos.length === 0 ? (
-                  <p className="px-3 py-2 text-sm text-teal-100">No hay grupos disponibles.</p>
-                ) : (
-                  <ul className="space-y-1">
-                    {grupos.map((grupo, index) => {
-                      const isActive = grupo.id === grupoActivoId
-                      const isOpen = openGroup === grupo.id
-                      const groupId = `indicator-group-${grupo.id}`
-                      return (
-                        <li key={grupo.id}>
-                          <button
-                            type="button"
-                            aria-expanded={isOpen}
-                            aria-controls={groupId}
-                            onClick={() => setOpenGroup((current) => current === grupo.id ? null : grupo.id)}
-                            className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-white ${
-                              isActive
-                                ? 'bg-white font-semibold text-[#0d4859] shadow-sm'
-                                : 'text-teal-50 hover:bg-white/10'
-                            }`}
-                          >
-                            <span
-                              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold ${
-                                isActive ? 'bg-cai-100 text-cai-900' : 'bg-white/10 text-white'
-                              }`}
-                            >
-                              {index + 1}
-                            </span>
-                            <span className="min-w-0 flex-1">{grupo.nombre}</span>
-                            {isOpen ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
-                          </button>
-                          {isOpen && (
-                            <div id={groupId} className="pb-1 pl-12 pr-2">
-                              <button
-                                type="button"
-                                onClick={() => onSelect(grupo.id)}
-                                className="w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-teal-100 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white"
-                              >
-                                Registrar datos
-                              </button>
-                            </div>
-                          )}
-                        </li>
-                      )
-                    })}
-                  </ul>
-                )}
-              </div>
-            )}
-          </>
-        )}
-        {isCollapsed && !isLoading && (
-          <ul className="space-y-1" aria-label="Grupos de indicadores">
-            {grupos.map((grupo, index) => (
-              <li key={grupo.id}>
-                  <button
-                    type="button"
-                    aria-current={grupo.id === grupoActivoId ? 'page' : undefined}
-                    onClick={() => onSelect(grupo.id)}
-                    title={grupo.nombre}
-                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-white ${
-                      grupo.id === grupoActivoId
-                        ? 'bg-white font-semibold text-[#0d4859] shadow-sm'
-                        : 'text-teal-50 hover:bg-white/10'
-                    }`}
-                  >
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/10 text-xs font-bold text-white">
-                      {index + 1}
-                    </span>
-                  </button>
-              </li>
-            ))}
-          </ul>
-        )}
       </nav>
 
       {!isCollapsed && (
@@ -429,6 +323,9 @@ export function App() {
 
   function handleGroupSelect(groupId: string) {
     setGrupoActivoId(groupId)
+  }
+
+  function handleOpenRegistration() {
     setActiveView('registro')
     setIsMobileMenuOpen(false)
   }
@@ -447,14 +344,10 @@ export function App() {
     return <CaiIdentificacionForm onIdentified={handleIdentified} />
   }
 
-  const grupoActivo = grupos.find((grupo) => grupo.id === grupoActivoId)
   const navigationProps: SidebarProps = {
-    grupos,
-    grupoActivoId,
     activeView,
-    isLoading: isLoadingGrupos,
-    onSelect: handleGroupSelect,
     onHome: handleHome,
+    onOpenRegistration: handleOpenRegistration,
     onOpenReports: handleOpenReports,
     onLogout: handleLogout,
     session,
@@ -480,14 +373,14 @@ export function App() {
             <button
               type="button"
               aria-expanded={isMobileMenuOpen}
-              aria-controls="mobile-group-menu"
+              aria-controls="mobile-navigation-menu"
               onClick={() => setIsMobileMenuOpen((open) => !open)}
               className="shrink-0 rounded-lg bg-[#0d4859] px-3 py-2 text-sm font-semibold text-white focus:outline-none focus:ring-2 focus:ring-cai-600 focus:ring-offset-2"
             >
               {isMobileMenuOpen ? (
                 <span className="inline-flex items-center gap-2"><X size={16} /> Cerrar</span>
               ) : (
-                <span className="inline-flex items-center gap-2"><Menu size={16} /> Grupos</span>
+                <span className="inline-flex items-center gap-2"><Menu size={16} /> Menú</span>
               )}
             </button>
           </div>
@@ -496,7 +389,7 @@ export function App() {
         {isMobileMenuOpen && (
           <div className="fixed inset-0 z-40 bg-slate-950/40 md:hidden">
             <aside
-              id="mobile-group-menu"
+              id="mobile-navigation-menu"
               className="flex h-full w-[min(20rem,88vw)] flex-col bg-[#0d4859] text-white shadow-2xl"
             >
               <Sidebar {...navigationProps} isMobile onCloseMobile={() => setIsMobileMenuOpen(false)} />
@@ -564,9 +457,8 @@ export function App() {
               <div className="grid gap-4 p-5 sm:grid-cols-2 sm:p-7">
                 <button
                   type="button"
-                  onClick={() => handleGroupSelect(grupoActivoId)}
-                  disabled={!grupoActivoId}
-                  className="rounded-xl border border-cai-100 bg-cai-50 p-5 text-left transition hover:border-cai-600 focus:outline-none focus:ring-2 focus:ring-cai-600 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={handleOpenRegistration}
+                  className="rounded-xl border border-cai-100 bg-cai-50 p-5 text-left transition hover:border-cai-600 focus:outline-none focus:ring-2 focus:ring-cai-600"
                 >
                   <ClipboardList size={24} className="text-cai-700" aria-hidden="true" />
                   <span className="mt-3 block font-semibold text-cai-900">Registro de datos</span>
@@ -600,23 +492,14 @@ export function App() {
           ) : (
             <div className="mx-auto w-full max-w-5xl">
               <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg">
-                <div className="border-b border-slate-200 bg-white px-5 py-5 sm:px-7">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cai-700">Grupo activo</p>
-                  <h2 className="mt-1 text-xl font-bold text-slate-900 sm:text-2xl">
-                    {isLoadingGrupos ? 'Cargando grupos…' : grupoActivo?.nombre ?? 'Seleccione un grupo'}
-                  </h2>
-                  {grupoActivo && (
-                    <p className="mt-1 text-sm text-slate-500">
-                      Seleccione un indicador para consultar y registrar sus resultados.
-                    </p>
-                  )}
-                </div>
                 <div className="p-5 sm:p-7">
                   {grupoActivoId ? (
                     <CaiRegistroForm
                       key={`${session.establecimientoId}-${grupoActivoId}`}
                       establecimientoId={session.establecimientoId}
                       grupoId={grupoActivoId}
+                      grupos={grupos}
+                      onGrupoChange={handleGroupSelect}
                       gestion={2026}
                     />
                   ) : (

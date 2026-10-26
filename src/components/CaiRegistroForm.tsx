@@ -3,10 +3,13 @@ import { getSupabaseClient } from '../lib/supabaseClient'
 import type { Database } from '../lib/database.types'
 
 type Indicador = Database['public']['Tables']['cai_indicadores']['Row']
+type Grupo = Database['public']['Tables']['cai_grupos']['Row']
 
 type CaiRegistroFormProps = {
   establecimientoId: string
   grupoId: string
+  grupos: Grupo[]
+  onGrupoChange: (grupoId: string) => void
   gestion?: number
 }
 
@@ -42,6 +45,8 @@ function errorMessage(error: unknown): string {
 export function CaiRegistroForm({
   establecimientoId,
   grupoId,
+  grupos,
+  onGrupoChange,
   gestion = 2026,
 }: CaiRegistroFormProps) {
   const [indicadores, setIndicadores] = useState<Indicador[]>([])
@@ -290,11 +295,31 @@ export function CaiRegistroForm({
       <section aria-labelledby="seleccion-heading" className="space-y-5">
         <div>
           <h2 id="seleccion-heading" className="text-lg font-semibold text-slate-900">
-            Selección del indicador
+            Selección de grupo e indicador
           </h2>
-          <p className="mt-1 text-sm text-slate-500">Seleccione un indicador del grupo activo.</p>
+          <p className="mt-1 text-sm text-slate-500">Seleccione un grupo para filtrar sus indicadores.</p>
         </div>
-        <div className="max-w-2xl">
+        <div className="grid gap-5 md:grid-cols-2">
+          <label className="block text-sm font-medium text-slate-700">
+            Grupo de indicadores
+            <select
+              className={inputClassName}
+              value={grupoId}
+              onChange={(event) => onGrupoChange(event.target.value)}
+              disabled={grupos.length === 0}
+              required
+            >
+              {grupos.length === 0 ? (
+                <option value="">No hay grupos disponibles</option>
+              ) : (
+                grupos.map((grupo) => (
+                  <option key={grupo.id} value={grupo.id}>
+                    {grupo.nombre}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
           <label className="block text-sm font-medium text-slate-700">
             Indicador
             <select
