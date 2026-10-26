@@ -413,6 +413,13 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
     setConfiguraciones([])
     setRegistros([])
 
+    if (!grupoId || !indicadorId) {
+      setIsLoadingDatos(false)
+      return () => {
+        active = false
+      }
+    }
+
     if (isLoadingCatalogos || isLoadingIndicadores) {
       setIsLoadingDatos(true)
       return () => {
@@ -420,11 +427,11 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
       }
     }
 
-    const indicadorIds = indicadorId
-      ? indicadores.some((indicador) => indicador.id === indicadorId)
-        ? [indicadorId]
-        : []
-      : indicadores.map((indicador) => indicador.id)
+    const indicadorIds = indicadores.some(
+      (indicador) => indicador.id === indicadorId && indicador.grupo_id === grupoId,
+    )
+      ? [indicadorId]
+      : []
 
     if (indicadorIds.length === 0) {
       setIsLoadingDatos(false)
@@ -479,6 +486,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
   }, [
     establecimientoId,
     gestion,
+    grupoId,
     indicadorId,
     indicadores,
     isLoadingCatalogos,
@@ -486,11 +494,28 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
     mes,
   ])
 
+  const selectedIndicator = indicadores.find((indicador) => indicador.id === indicadorId)
+  const hasRequiredSelection =
+    Boolean(grupoId) && selectedIndicator?.grupo_id === grupoId
+  const isProductivityIndicator =
+    hasRequiredSelection && isMonthlyProductivityIndicator(selectedIndicator, grupos)
+
   const reporte = useMemo(() => {
-    const productivityMode = isMonthlyProductivityIndicator(
-      indicadores.find((indicator) => indicator.id === indicadorId),
-      grupos,
-    )
+    if (!hasRequiredSelection || !selectedIndicator) {
+      return {
+        rows: [],
+        poblacionTotal: 0,
+        atendidosTotal: 0,
+        coberturaPromedio: 0,
+        porcentajePrimerPeriodo: 0,
+        porcentajeIncremento: 0,
+        metaInstitucional: null,
+        cumplimientoMetaInstitucional: null,
+        tasaProductividadInstitucional: null,
+      }
+    }
+
+    const productivityMode = isProductivityIndicator
     const establecimientosFiltrados = establecimientoId
       ? establecimientos.filter((establecimiento) => establecimiento.id === establecimientoId)
       : establecimientos
@@ -643,16 +668,22 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           : null,
       tasaProductividadInstitucional: null,
     }
-  }, [establecimientoId, establecimientos, configuraciones, registros, mes, indicadores, indicadorId, grupos])
+  }, [
+    establecimientoId,
+    establecimientos,
+    configuraciones,
+    registros,
+    mes,
+    selectedIndicator,
+    hasRequiredSelection,
+    isProductivityIndicator,
+  ])
 
   const datosMensualesModal = useMemo(() => {
     if (!establecimientoModal) return []
 
     let atendidosAcumulados = 0
-    const productivityMode = isMonthlyProductivityIndicator(
-      indicadores.find((indicator) => indicator.id === indicadorId),
-      grupos,
-    )
+    const productivityMode = isProductivityIndicator
     return MESES.slice(0, mes).map((nombre, index) => {
       const monthRecords = registros.filter(
         (registro) =>
@@ -680,7 +711,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
         atendidos: atendidosAcumulados,
       }
     })
-  }, [establecimientoModal, registros, mes, indicadores, indicadorId, grupos])
+  }, [establecimientoModal, registros, mes, isProductivityIndicator])
 
   useEffect(() => {
     if (!establecimientoModal) return
@@ -742,8 +773,6 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
-  const selectedIndicator = indicadores.find((indicador) => indicador.id === indicadorId)
-  const isProductivityIndicator = isMonthlyProductivityIndicator(selectedIndicator, grupos)
   const firstSemesterLabel = isProductivityIndicator
     ? 'Tasa hasta Junio'
     : mes < 6
@@ -850,7 +879,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
             </select>
           </label>
         </div>
-        {selectedIndicator && (
+        {hasRequiredSelection && selectedIndicator && (
           <p className="mt-3 text-xs text-slate-500">
             Indicador filtrado: {selectedIndicator.numero_indicador}. {selectedIndicator.descripcion}
           </p>
@@ -863,6 +892,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
         </div>
       )}
 
+      {selectedIndicator && (
       <section aria-label="Indicadores clave" className="grid w-full grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5">
         <MetricCard
           icon={Users}
@@ -943,6 +973,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           </p>
         </article>
       </section>
+      )}
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -960,7 +991,11 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           </div>
           {isLoadingDatos && <span className="text-xs font-medium text-cai-700">Actualizando datos…</span>}
         </div>
-        {reporte.rows.length === 0 ? (
+        {!hasRequiredSelection || !selectedIndicator ? (
+          <div className="flex h-72 items-center justify-center rounded-xl bg-slate-50 px-6 text-center text-sm text-slate-600">
+            Por favor, seleccione un Grupo de Indicadores y un Indicador Específico para visualizar el reporte de cobertura.
+          </div>
+        ) : reporte.rows.length === 0 ? (
           <div className="flex h-72 items-center justify-center rounded-xl bg-slate-50 text-sm text-slate-500">
             No hay establecimientos para mostrar con los filtros seleccionados.
           </div>
@@ -1167,6 +1202,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
         )}
       </section>
 
+      {hasRequiredSelection && selectedIndicator && (
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 px-5 py-5 sm:px-6">
           <h2 className="text-lg font-bold text-slate-900">Detalle analítico por establecimiento</h2>
@@ -1296,7 +1332,8 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           </table>
         </div>
       </section>
-      {establecimientoModal && (
+      )}
+      {hasRequiredSelection && selectedIndicator && establecimientoModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm"
           onMouseDown={(event) => {
