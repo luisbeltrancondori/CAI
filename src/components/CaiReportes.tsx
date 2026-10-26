@@ -24,12 +24,18 @@ import {
 } from 'recharts'
 import { getSupabaseClient } from '../lib/supabaseClient'
 import type { Database } from '../lib/database.types'
+import { getProductivityLevel, isMonthlyProductivityIndicator } from '../lib/indicatorMetrics'
 
 type Establecimiento = Pick<Database['public']['Tables']['cai_establecimientos']['Row'], 'id' | 'nombre'>
 type Grupo = Pick<Database['public']['Tables']['cai_grupos']['Row'], 'id' | 'nombre' | 'orden'>
 type Indicador = Pick<
   Database['public']['Tables']['cai_indicadores']['Row'],
-  'id' | 'grupo_id' | 'numero_indicador' | 'descripcion'
+  | 'id'
+  | 'grupo_id'
+  | 'numero_indicador'
+  | 'descripcion'
+  | 'numerador_explicacion'
+  | 'denominador_explicacion'
 >
 type Configuracion = Pick<
   Database['public']['Tables']['cai_config_establecimiento']['Row'],
@@ -37,7 +43,7 @@ type Configuracion = Pick<
 >
 type RegistroMensual = Pick<
   Database['public']['Tables']['cai_registros_mensuales']['Row'],
-  'establecimiento_id' | 'indicador_id' | 'mes' | 'valor_numerador'
+  'establecimiento_id' | 'indicador_id' | 'mes' | 'valor_numerador' | 'valor_denominador'
 >
 
 type ReporteEstablecimiento = {
@@ -54,11 +60,12 @@ type ReporteEstablecimiento = {
   meta: number | null
   avanceMeta: number | null
   brechaMeta: number | null
+  tasaProductividad: number | null
 }
 
 type EstadoSemaforo = {
-  label: 'COLOR ROJO' | 'COLOR AMARILLO' | 'COLOR VERDE' | 'SIN META'
-  shortLabel: 'Rojo' | 'Amarillo' | 'Verde' | 'Sin meta'
+  label: 'COLOR ROJO' | 'COLOR AMARILLO' | 'COLOR VERDE' | 'SIN META' | 'BAJO' | 'REGULAR' | 'BUENO' | 'MUY BUENO'
+  shortLabel: 'Rojo' | 'Amarillo' | 'Verde' | 'Sin meta' | 'Bajo' | 'Regular' | 'Bueno' | 'Muy bueno'
   dotClass: string
   badgeClass: string
 }
@@ -128,6 +135,12 @@ function formatPercentage(value: number | null): string {
     : `${new Intl.NumberFormat('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)}%`
 }
 
+function formatProductivityRate(value: number | null): string {
+  return value === null
+    ? '—'
+    : new Intl.NumberFormat('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)
+}
+
 function getEstadoSemaforo(cumplimientoMeta: number | null): EstadoSemaforo {
   if (cumplimientoMeta === null) {
     return {
@@ -164,6 +177,23 @@ function getEstadoSemaforo(cumplimientoMeta: number | null): EstadoSemaforo {
   }
 }
 
+function getProductivitySemaforo(rate: number | null): EstadoSemaforo {
+  const level = getProductivityLevel(rate)
+  if (level === 'Bajo') {
+    return { label: 'BAJO', shortLabel: level, dotClass: 'bg-red-500', badgeClass: 'bg-red-100 text-red-800' }
+  }
+  if (level === 'Regular') {
+    return { label: 'REGULAR', shortLabel: level, dotClass: 'bg-amber-400', badgeClass: 'bg-amber-100 text-amber-900' }
+  }
+  if (level === 'Bueno') {
+    return { label: 'BUENO', shortLabel: level, dotClass: 'bg-sky-500', badgeClass: 'bg-sky-100 text-sky-900' }
+  }
+  if (level === 'Muy bueno') {
+    return { label: 'MUY BUENO', shortLabel: level, dotClass: 'bg-emerald-600', badgeClass: 'bg-emerald-100 text-emerald-800' }
+  }
+  return { label: 'SIN META', shortLabel: 'Sin meta', dotClass: 'bg-slate-400', badgeClass: 'bg-slate-100 text-slate-700' }
+}
+
 function escapeCsv(value: string | number): string {
   const text = String(value)
   return `"${text.replaceAll('"', '""')}"`
@@ -192,9 +222,11 @@ function CoverageTooltip({
   label,
   incrementalLabel,
   firstSemesterLabel,
+  isProductivity,
 }: TooltipProps<number, string> & {
   incrementalLabel: string
   firstSemesterLabel: string
+  isProductivity: boolean
 }) {
   const row = payload?.map((item) => item.payload).find(isReporteEstablecimiento)
   if (!active || !row) return null
@@ -202,7 +234,7 @@ function CoverageTooltip({
   const values = [
     { label: firstSemesterLabel, value: row.porcentajeJunio, color: '#2F6B3F' },
     { label: incrementalLabel, value: row.porcentajeIncremento, color: '#D32E3A' },
-    { label: 'Cobertura Total Acumulada', value: row.cobertura, color: '#334155' },
+    { label: isProductivity ? 'Tasa actividades/consultas' : 'Cobertura Total Acumulada', value: row.cobertura, color: '#334155' },
   ]
 
   return (
@@ -215,15 +247,19 @@ function CoverageTooltip({
               <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: item.color }} />
               {item.label}
             </dt>
-            <dd className="font-semibold text-slate-900">{formatPercentage(item.value)}</dd>
+            <dd className="font-semibold text-slate-900">
+              {isProductivity ? formatProductivityRate(item.value) : formatPercentage(item.value)}
+            </dd>
           </div>
         ))}
-        <div className="flex items-center justify-between gap-4 border-t border-slate-100 pt-2 text-xs">
-          <dt className="text-slate-600">Brecha restante para la meta</dt>
-          <dd className="font-semibold text-rose-700">
-            {row.brechaMeta === null ? 'Sin meta' : formatPercentage(row.brechaMeta)}
-          </dd>
-        </div>
+        {!isProductivity && (
+          <div className="flex items-center justify-between gap-4 border-t border-slate-100 pt-2 text-xs">
+            <dt className="text-slate-600">Brecha restante para la meta</dt>
+            <dd className="font-semibold text-rose-700">
+              {row.brechaMeta === null ? 'Sin meta' : formatPercentage(row.brechaMeta)}
+            </dd>
+          </div>
+        )}
       </dl>
     </div>
   )
@@ -247,6 +283,8 @@ function MetricCard({
     firstValue: number
     incrementLabel: string
     incrementValue: number
+    incrementPrefix?: string
+    formatAsRatio?: boolean
   }
 }) {
   const Icon = icon
@@ -268,13 +306,20 @@ function MetricCard({
           <span className="inline-flex items-center gap-2 text-xs">
             <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-amber-500" aria-hidden="true" />
             <span className="text-slate-500">{breakdown.firstLabel}</span>
-            <span className="font-semibold text-amber-600">{formatPercentage(breakdown.firstValue)}</span>
+            <span className="font-semibold text-amber-600">
+              {breakdown.formatAsRatio
+                ? formatProductivityRate(breakdown.firstValue)
+                : formatPercentage(breakdown.firstValue)}
+            </span>
           </span>
           <span className="inline-flex items-center gap-2 text-xs">
             <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
             <span className="text-slate-500">{breakdown.incrementLabel}</span>
             <span className="font-semibold text-emerald-600">
-              +{formatPercentage(breakdown.incrementValue)}
+              {breakdown.incrementPrefix ?? '+'}
+              {breakdown.formatAsRatio
+                ? formatProductivityRate(breakdown.incrementValue)
+                : formatPercentage(breakdown.incrementValue)}
             </span>
           </span>
         </div>
@@ -340,7 +385,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
       try {
         let query = getSupabaseClient()
           .from('cai_indicadores')
-          .select('id, grupo_id, numero_indicador, descripcion')
+          .select('id, grupo_id, numero_indicador, descripcion, numerador_explicacion, denominador_explicacion')
         if (grupoId) query = query.eq('grupo_id', grupoId)
         const { data, error: queryError } = await query
         if (queryError) throw queryError
@@ -407,7 +452,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           fetchAllPages(async (from, to) => {
             let query = supabase
               .from('cai_registros_mensuales')
-              .select('establecimiento_id, indicador_id, mes, valor_numerador')
+              .select('establecimiento_id, indicador_id, mes, valor_numerador, valor_denominador')
               .eq('gestion', gestion)
               .lte('mes', 12)
               .in('indicador_id', indicadorIds)
@@ -442,6 +487,10 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
   ])
 
   const reporte = useMemo(() => {
+    const productivityMode = isMonthlyProductivityIndicator(
+      indicadores.find((indicator) => indicator.id === indicadorId),
+      grupos,
+    )
     const establecimientosFiltrados = establecimientoId
       ? establecimientos.filter((establecimiento) => establecimiento.id === establecimientoId)
       : establecimientos
@@ -449,6 +498,45 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
     const rows = establecimientosFiltrados.map((establecimiento): ReporteEstablecimiento => {
       const configRows = configuraciones.filter((item) => item.establecimiento_id === establecimiento.id)
       const registroRows = registros.filter((item) => item.establecimiento_id === establecimiento.id)
+      if (productivityMode) {
+        const registroHastaMes = registroRows.filter((item) => item.mes <= mes)
+        const registroPrimerSemestre = registroRows.filter((item) => item.mes <= 6)
+        const registroSegundoSemestre = registroHastaMes.filter((item) => item.mes > 6)
+        const actividades = (items: RegistroMensual[]) =>
+          items.reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
+        const consultas = (items: RegistroMensual[]) =>
+          items.reduce((total, item) => total + Number(item.valor_denominador || 0), 0)
+        const totalActividades = actividades(registroHastaMes)
+        const totalConsultas = consultas(registroHastaMes)
+        const tasaProductividad = totalConsultas > 0 ? totalActividades / totalConsultas : null
+        const actividadesPrimerSemestre = actividades(registroPrimerSemestre)
+        const consultasPrimerSemestre = consultas(registroPrimerSemestre)
+        const actividadesSegundoSemestre = actividades(registroSegundoSemestre)
+        const consultasSegundoSemestre = consultas(registroSegundoSemestre)
+
+        return {
+          id: establecimiento.id,
+          nombre: establecimiento.nombre,
+          poblacion: totalConsultas,
+          atendidos: totalActividades,
+          primerSemestre: actividadesPrimerSemestre,
+          incrementoSegundoSemestre: actividadesSegundoSemestre,
+          incrementoAtendidos: actividadesSegundoSemestre,
+          porcentajeJunio:
+            consultasPrimerSemestre > 0
+              ? actividadesPrimerSemestre / consultasPrimerSemestre
+              : 0,
+          porcentajeIncremento:
+            consultasSegundoSemestre > 0
+              ? actividadesSegundoSemestre / consultasSegundoSemestre
+              : 0,
+          cobertura: tasaProductividad ?? 0,
+          meta: null,
+          avanceMeta: null,
+          brechaMeta: null,
+          tasaProductividad,
+        }
+      }
       const poblacion = configRows.reduce((total, item) => total + Number(item.poblacion_programada || 0), 0)
       const metaWeight = configRows.reduce(
         (total, item) =>
@@ -482,8 +570,42 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
         meta,
         avanceMeta: meta !== null && meta > 0 ? (cobertura / meta) * 100 : null,
         brechaMeta: meta === null ? null : Math.max(meta - cobertura, 0),
+        tasaProductividad: null,
       }
     })
+
+    if (productivityMode) {
+      const registrosHastaMes = registros.filter((item) => item.mes <= mes)
+      const registrosPrimerSemestre = registros.filter((item) => item.mes <= 6)
+      const registrosSegundoSemestre = registrosHastaMes.filter((item) => item.mes > 6)
+      const actividades = (items: RegistroMensual[]) =>
+        items.reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
+      const consultas = (items: RegistroMensual[]) =>
+        items.reduce((total, item) => total + Number(item.valor_denominador || 0), 0)
+      const totalActividades = actividades(registrosHastaMes)
+      const totalConsultas = consultas(registrosHastaMes)
+      const consultasPrimerSemestre = consultas(registrosPrimerSemestre)
+      const consultasSegundoSemestre = consultas(registrosSegundoSemestre)
+
+      return {
+        rows,
+        poblacionTotal: totalConsultas,
+        atendidosTotal: totalActividades,
+        coberturaPromedio: totalConsultas > 0 ? totalActividades / totalConsultas : 0,
+        porcentajePrimerPeriodo:
+          consultasPrimerSemestre > 0
+            ? actividades(registrosPrimerSemestre) / consultasPrimerSemestre
+            : 0,
+        porcentajeIncremento:
+          consultasSegundoSemestre > 0
+            ? actividades(registrosSegundoSemestre) / consultasSegundoSemestre
+            : 0,
+        metaInstitucional: null,
+        cumplimientoMetaInstitucional: null,
+        tasaProductividadInstitucional:
+          totalConsultas > 0 ? totalActividades / totalConsultas : null,
+      }
+    }
 
     const poblacionTotal = configuraciones.reduce(
       (total, item) => total + Number(item.poblacion_programada || 0),
@@ -519,28 +641,46 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
         poblacionTotal > 0 && metaTotalPonderada > 0
           ? (atendidosTotal / metaTotalPonderada) * 10000
           : null,
+      tasaProductividadInstitucional: null,
     }
-  }, [establecimientoId, establecimientos, configuraciones, registros, mes])
+  }, [establecimientoId, establecimientos, configuraciones, registros, mes, indicadores, indicadorId, grupos])
 
   const datosMensualesModal = useMemo(() => {
     if (!establecimientoModal) return []
 
     let atendidosAcumulados = 0
+    const productivityMode = isMonthlyProductivityIndicator(
+      indicadores.find((indicator) => indicator.id === indicadorId),
+      grupos,
+    )
     return MESES.slice(0, mes).map((nombre, index) => {
-      atendidosAcumulados += registros
-        .filter(
-          (registro) =>
-            registro.establecimiento_id === establecimientoModal.id &&
-            registro.mes === index + 1,
+      const monthRecords = registros.filter(
+        (registro) =>
+          registro.establecimiento_id === establecimientoModal.id &&
+          registro.mes === index + 1,
+      )
+      const monthActivities = monthRecords.reduce(
+        (total, registro) => total + Number(registro.valor_numerador || 0),
+        0,
+      )
+      if (productivityMode) {
+        const monthConsultations = monthRecords.reduce(
+          (total, registro) => total + Number(registro.valor_denominador || 0),
+          0,
         )
-        .reduce((total, registro) => total + Number(registro.valor_numerador || 0), 0)
+        return {
+          mes: nombre.slice(0, 3),
+          atendidos: monthConsultations > 0 ? monthActivities / monthConsultations : null,
+        }
+      }
+      atendidosAcumulados += monthActivities
 
       return {
         mes: nombre.slice(0, 3),
         atendidos: atendidosAcumulados,
       }
     })
-  }, [establecimientoModal, configuraciones, registros, mes])
+  }, [establecimientoModal, registros, mes, indicadores, indicadorId, grupos])
 
   useEffect(() => {
     if (!establecimientoModal) return
@@ -560,14 +700,18 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
     const nombreMes = MESES[mes - 1]
     const header = [
       'Centro de Salud',
-      'Población Programada',
-      'Atendidos a Junio',
-      '% Logrado a Junio',
-      `Atendidos a ${nombreMes} (Acum.)`,
-      `% Logrado a ${nombreMes}`,
-      `Incremento Atendidos (Jul-${nombreMes})`,
-      'Incremento % (Diferencia)',
-      'Compromiso Gestión (Meta)',
+      isProductivityIndicator ? 'Consultas Nuevas y Repetidas' : 'Población Programada',
+      isProductivityIndicator ? 'Actividades hasta Junio' : 'Atendidos a Junio',
+      isProductivityIndicator ? 'Tasa hasta Junio' : '% Logrado a Junio',
+      isProductivityIndicator ? `Actividades a ${nombreMes}` : `Atendidos a ${nombreMes} (Acum.)`,
+      isProductivityIndicator ? `Tasa a ${nombreMes} (%)` : `% Logrado a ${nombreMes}`,
+      isProductivityIndicator
+        ? `Actividades Julio-${nombreMes}`
+        : `Incremento Atendidos (Jul-${nombreMes})`,
+      isProductivityIndicator
+        ? `Tasa Julio-${nombreMes}`
+        : 'Incremento % (Diferencia)',
+      isProductivityIndicator ? 'Rango normativo' : 'Compromiso Gestión (Meta)',
       'Estado / Semáforo',
     ]
     const csvRows = reporte.rows.map((row) => [
@@ -578,9 +722,13 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
       row.atendidos,
       row.cobertura.toFixed(2),
       row.incrementoAtendidos,
-      (row.cobertura - row.porcentajeJunio).toFixed(2),
-      row.meta?.toFixed(2) ?? '',
-      getEstadoSemaforo(row.avanceMeta).shortLabel,
+      isProductivityIndicator
+        ? row.porcentajeIncremento.toFixed(2)
+        : (row.cobertura - row.porcentajeJunio).toFixed(2),
+      isProductivityIndicator ? '0.00–0.25 Bajo; 0.26–0.59 Regular; 0.60–0.75 Bueno; 0.76–1.00 Muy bueno' : row.meta?.toFixed(2) ?? '',
+      (isProductivityIndicator
+        ? getProductivitySemaforo(row.tasaProductividad)
+        : getEstadoSemaforo(row.avanceMeta)).shortLabel,
     ])
     const csv = [header, ...csvRows].map((row) => row.map(escapeCsv).join(';')).join('\r\n')
     const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' })
@@ -595,11 +743,24 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
   }
 
   const selectedIndicator = indicadores.find((indicador) => indicador.id === indicadorId)
-  const firstSemesterLabel = mes < 6 ? `Logro Ene–${MESES[mes - 1]}` : 'Logro a Junio'
-  const incrementalLabel = `Incremento Jul–${MESES[mes - 1]}`
+  const isProductivityIndicator = isMonthlyProductivityIndicator(selectedIndicator, grupos)
+  const firstSemesterLabel = isProductivityIndicator
+    ? 'Tasa hasta Junio'
+    : mes < 6
+      ? `Logro Ene–${MESES[mes - 1]}`
+      : 'Logro a Junio'
+  const incrementalLabel = isProductivityIndicator
+    ? `Tasa Julio–${MESES[mes - 1]}`
+    : `Incremento Jul–${MESES[mes - 1]}`
   const firstSemesterChartLabel =
-    mes < 6 ? `Logrado Ene–${MESES[mes - 1]}` : '% Logrado a Junio'
-  const semaforoInstitucional = getEstadoSemaforo(reporte.cumplimientoMetaInstitucional)
+    isProductivityIndicator
+      ? 'Tasa hasta Junio'
+      : mes < 6
+        ? `Logrado Ene–${MESES[mes - 1]}`
+        : '% Logrado a Junio'
+  const semaforoInstitucional = isProductivityIndicator
+    ? getProductivitySemaforo(reporte.tasaProductividadInstitucional)
+    : getEstadoSemaforo(reporte.cumplimientoMetaInstitucional)
 
   return (
     <div className="space-y-6">
@@ -705,41 +866,65 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
       <section aria-label="Indicadores clave" className="grid w-full grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5">
         <MetricCard
           icon={Users}
-          label="Población Total Programada"
+          label={isProductivityIndicator ? 'Consultas Nuevas y Repetidas' : 'Población Total Programada'}
           value={formatNumber(reporte.poblacionTotal)}
-          detail={`${gestion} · población acumulada del filtro`}
+          detail={
+            isProductivityIndicator
+              ? `${gestion} · denominador acumulado hasta ${MESES[mes - 1]}`
+              : `${gestion} · población acumulada del filtro`
+          }
           accent="bg-sky-50"
         />
         <MetricCard
           icon={CircleCheck}
-          label="Atendidos / Alcanzados"
+          label={isProductivityIndicator ? 'Actividades clínicas realizadas' : 'Atendidos / Alcanzados'}
           value={formatNumber(reporte.atendidosTotal)}
           detail={`Acumulado hasta ${MESES[mes - 1]}`}
           accent="bg-emerald-50 text-emerald-700"
         />
         <MetricCard
           icon={Activity}
-          label="% Cobertura Promedio Red"
-          value={formatPercentage(reporte.coberturaPromedio)}
-          detail="Alcanzados sobre población programada"
+          label={isProductivityIndicator ? 'Tasa actividades / consultas' : '% Cobertura Promedio Red'}
+          value={isProductivityIndicator
+            ? formatProductivityRate(reporte.coberturaPromedio)
+            : formatPercentage(reporte.coberturaPromedio)}
+          detail={
+            isProductivityIndicator
+              ? 'Actividades clínicas ÷ consultas'
+              : 'Alcanzados sobre población programada'
+          }
           accent="bg-violet-50 text-violet-700"
           breakdown={{
-            firstLabel: mes < 6 ? `Logrado Ene–${MESES[mes - 1]}` : 'Logrado a Junio',
+            firstLabel: isProductivityIndicator
+              ? 'Tasa hasta Junio'
+              : mes < 6
+                ? `Logrado Ene–${MESES[mes - 1]}`
+                : 'Logrado a Junio',
             firstValue: reporte.porcentajePrimerPeriodo,
-            incrementLabel: mes > 6 ? `Inc. Jul–${MESES[mes - 1]}` : 'Inc. Jul–Dic',
+            incrementLabel: isProductivityIndicator
+              ? `Tasa Julio–${MESES[mes - 1]}`
+              : mes > 6
+                ? `Inc. Jul–${MESES[mes - 1]}`
+                : 'Inc. Jul–Dic',
             incrementValue: reporte.porcentajeIncremento,
+            incrementPrefix: isProductivityIndicator ? '' : undefined,
+            formatAsRatio: isProductivityIndicator,
           }}
         />
         <MetricCard
           icon={Target}
-          label="Meta Institucional"
-          value={formatPercentage(reporte.metaInstitucional)}
-          detail="Promedio ponderado por población"
+          label={isProductivityIndicator ? 'Rangos normativos' : 'Meta Institucional'}
+          value={isProductivityIndicator ? '0.00–1.00' : formatPercentage(reporte.metaInstitucional)}
+          detail={
+            isProductivityIndicator
+              ? 'Bajo ≤0.25 · Regular ≤0.59 · Bueno ≤0.75 · Muy bueno ≥0.76'
+              : 'Promedio ponderado por población'
+          }
           accent="bg-amber-50 text-amber-700"
         />
         <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Calificación de Cobertura
+            {isProductivityIndicator ? 'Calificación de Productividad' : 'Calificación de Cobertura'}
           </p>
           <div className="mt-3 flex items-center gap-3">
             <span
@@ -748,9 +933,13 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
             />
             <p className="text-lg font-bold leading-tight text-slate-900">{semaforoInstitucional.label}</p>
           </div>
-          <p className="mt-2 text-xs text-slate-500">De la Meta Semestral/Institucional</p>
+          <p className="mt-2 text-xs text-slate-500">
+            {isProductivityIndicator ? 'Según tasa actividades / consultas (0–1)' : 'De la Meta Semestral/Institucional'}
+          </p>
           <p className="mt-1 text-xs font-medium text-slate-600">
-            Cumplimiento: {formatPercentage(reporte.cumplimientoMetaInstitucional)}
+            {isProductivityIndicator
+              ? `Tasa: ${formatProductivityRate(reporte.tasaProductividadInstitucional)}`
+              : `Cumplimiento: ${formatPercentage(reporte.cumplimientoMetaInstitucional)}`}
           </p>
         </article>
       </section>
@@ -758,9 +947,15 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-lg font-bold text-slate-900">Evolución y logro por centro de salud</h2>
+            <h2 className="text-lg font-bold text-slate-900">
+              {isProductivityIndicator
+                ? 'Tasa de productividad por centro de salud'
+                : 'Evolución y logro por centro de salud'}
+            </h2>
             <p className="mt-1 text-sm text-slate-500">
-              {firstSemesterLabel} e incremento julio–{MESES[mes - 1]} de {gestion}.
+              {isProductivityIndicator
+                ? `Tasa de actividades clínicas por consultas en los periodos seleccionados de ${gestion}.`
+                : `${firstSemesterLabel} e incremento julio–${MESES[mes - 1]} de ${gestion}.`}
             </p>
           </div>
           {isLoadingDatos && <span className="text-xs font-medium text-cai-700">Actualizando datos…</span>}
@@ -774,7 +969,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={reporte.rows}
-                margin={{ top: 30, right: 100, left: 4, bottom: 70 }}
+                margin={{ top: 30, right: isProductivityIndicator ? 190 : 100, left: 4, bottom: 70 }}
                 barCategoryGap="28%"
               >
                 <CartesianGrid stroke="#e2e8f0" strokeDasharray="4 4" vertical={false} />
@@ -789,17 +984,98 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                   tickLine={false}
                 />
                 <YAxis
-                  unit="%"
+                  unit={isProductivityIndicator ? undefined : '%'}
                   tick={{ fill: '#64748b', fontSize: 11 }}
                   axisLine={false}
                   tickLine={false}
-                  domain={[0, (max: number) => Math.max(100, Math.ceil(max / 10) * 10)]}
+                  domain={isProductivityIndicator ? [0, 1] : [0, (max: number) => Math.max(100, Math.ceil(max / 10) * 10)]}
+                  ticks={isProductivityIndicator ? [0, 0.25, 0.5, 0.75, 1] : undefined}
+                  tickFormatter={(value: number) =>
+                    isProductivityIndicator ? formatProductivityRate(value) : String(value)
+                  }
                 />
+                {isProductivityIndicator && (
+                  <>
+                    <ReferenceLine
+                      y={0.25}
+                      stroke="#94a3b8"
+                      strokeDasharray="3 3"
+                      isFront
+                      ifOverflow="extendDomain"
+                      label={{
+                        value: '0.25 - Bajo',
+                        fill: '#64748b',
+                        position: 'right',
+                        offset: 8,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        stroke: '#ffffff',
+                        strokeWidth: 4,
+                        paintOrder: 'stroke',
+                      }}
+                    />
+                    <ReferenceLine
+                      y={0.50}
+                      stroke="#a8a29e"
+                      strokeDasharray="3 3"
+                      isFront
+                      ifOverflow="extendDomain"
+                      label={{
+                        value: '0.50 - Regular',
+                        fill: '#78716c',
+                        position: 'right',
+                        offset: 8,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        stroke: '#ffffff',
+                        strokeWidth: 4,
+                        paintOrder: 'stroke',
+                      }}
+                    />
+                    <ReferenceLine
+                      y={0.75}
+                      stroke="#94a3b8"
+                      strokeDasharray="3 3"
+                      isFront
+                      ifOverflow="extendDomain"
+                      label={{
+                        value: '0.75 - Bueno',
+                        fill: '#64748b',
+                        position: 'right',
+                        offset: 8,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        stroke: '#ffffff',
+                        strokeWidth: 4,
+                        paintOrder: 'stroke',
+                      }}
+                    />
+                    <ReferenceLine
+                      y={1.00}
+                      stroke="#a8a29e"
+                      strokeDasharray="3 3"
+                      isFront
+                      ifOverflow="extendDomain"
+                      label={{
+                        value: '1.00 - Muy bueno',
+                        fill: '#78716c',
+                        position: 'right',
+                        offset: 8,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        stroke: '#ffffff',
+                        strokeWidth: 4,
+                        paintOrder: 'stroke',
+                      }}
+                    />
+                  </>
+                )}
                 <Tooltip
                   content={
                     <CoverageTooltip
                       incrementalLabel={incrementalLabel}
                       firstSemesterLabel={firstSemesterLabel}
+                      isProductivity={isProductivityIndicator}
                     />
                   }
                   cursor={{ fill: '#f1f5f9', opacity: 0.65 }}
@@ -827,7 +1103,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                 <Bar
                   name={firstSemesterChartLabel}
                   dataKey="porcentajeJunio"
-                  stackId="a"
+                  stackId={isProductivityIndicator ? undefined : 'a'}
                   fill="#2F6B3F"
                   radius={[0, 0, 0, 0]}
                   barSize={48}
@@ -836,7 +1112,13 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                   <LabelList
                     dataKey="porcentajeJunio"
                     position="inside"
-                    formatter={(value: number) => (value > 0 ? formatPercentage(value) : '')}
+                    formatter={(value: number) =>
+                      value > 0
+                        ? isProductivityIndicator
+                          ? formatProductivityRate(value)
+                          : formatPercentage(value)
+                        : ''
+                    }
                     fill="#ffffff"
                     fontSize={10}
                     fontWeight={700}
@@ -846,7 +1128,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                 <Bar
                   name={incrementalLabel}
                   dataKey="porcentajeIncremento"
-                  stackId="a"
+                  stackId={isProductivityIndicator ? undefined : 'a'}
                   fill="#D32E3A"
                   radius={[4, 4, 0, 0]}
                   barSize={48}
@@ -855,21 +1137,29 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                   <LabelList
                     dataKey="porcentajeIncremento"
                     position="inside"
-                    formatter={(value: number) => (value > 0 ? formatPercentage(value) : '')}
+                    formatter={(value: number) =>
+                      value > 0
+                        ? isProductivityIndicator
+                          ? formatProductivityRate(value)
+                          : formatPercentage(value)
+                        : ''
+                    }
                     fill="#ffffff"
                     fontSize={10}
                     fontWeight={700}
                     pointerEvents="none"
                   />
-                  <LabelList
-                    dataKey="cobertura"
-                    position="top"
-                    formatter={(value: number) => formatPercentage(value)}
-                    fill="#334155"
-                    fontSize={11}
-                    fontWeight={700}
-                    pointerEvents="none"
-                  />
+                  {!isProductivityIndicator && (
+                    <LabelList
+                      dataKey="cobertura"
+                      position="top"
+                      formatter={(value: number) => formatPercentage(value)}
+                      fill="#334155"
+                      fontSize={11}
+                      fontWeight={700}
+                      pointerEvents="none"
+                    />
+                  )}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
@@ -880,30 +1170,50 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 px-5 py-5 sm:px-6">
           <h2 className="text-lg font-bold text-slate-900">Detalle analítico por establecimiento</h2>
-          <p className="mt-1 text-sm text-slate-500">Cobertura acumulada hasta {MESES[mes - 1]} de {gestion}.</p>
+          <p className="mt-1 text-sm text-slate-500">
+            {isProductivityIndicator
+              ? `Tasa acumulada hasta ${MESES[mes - 1]} de ${gestion}.`
+              : `Cobertura acumulada hasta ${MESES[mes - 1]} de ${gestion}.`}
+          </p>
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-[1240px] divide-y divide-slate-200 text-sm">
             <thead className="bg-[#0d4859] text-left text-xs uppercase tracking-wide text-white">
               <tr>
                 <th scope="col" className="min-w-48 px-4 py-3 font-bold">Centro de Salud</th>
-                <th scope="col" className="min-w-32 px-4 py-3 text-right font-bold">Población Programada</th>
-                <th scope="col" className="min-w-32 bg-sky-900 px-4 py-3 text-right font-bold">Atendidos a Junio</th>
-                <th scope="col" className="min-w-32 bg-sky-900 px-4 py-3 text-right font-bold">% Logrado a Junio</th>
+                <th scope="col" className="min-w-32 px-4 py-3 text-right font-bold">
+                  {isProductivityIndicator ? 'Consultas (Nuevas y Repetidas)' : 'Población Programada'}
+                </th>
+                <th scope="col" className="min-w-32 bg-sky-900 px-4 py-3 text-right font-bold">
+                  {isProductivityIndicator
+                    ? 'Actividades hasta Junio'
+                    : 'Atendidos a Junio'}
+                </th>
+                <th scope="col" className="min-w-32 bg-sky-900 px-4 py-3 text-right font-bold">
+                  {isProductivityIndicator
+                    ? 'Tasa hasta Junio'
+                    : '% Logrado a Junio'}
+                </th>
                 <th scope="col" className="min-w-40 bg-emerald-900 px-4 py-3 text-right font-bold">
-                  Atendidos a {MESES[mes - 1]} (Acum.)
+                  {isProductivityIndicator
+                    ? `Actividades a ${MESES[mes - 1]}`
+                    : `Atendidos a ${MESES[mes - 1]} (Acum.)`}
                 </th>
                 <th scope="col" className="min-w-36 bg-emerald-900 px-4 py-3 text-right font-bold">
-                  % Logrado a {MESES[mes - 1]}
+                  {isProductivityIndicator ? `Tasa a ${MESES[mes - 1]}` : `% Logrado a ${MESES[mes - 1]}`}
                 </th>
                 <th scope="col" className="min-w-40 bg-emerald-900 px-4 py-3 text-right font-bold">
-                  Incremento Atendidos (Jul-{MESES[mes - 1]})
+                  {isProductivityIndicator
+                    ? `Actividades Julio-${MESES[mes - 1]}`
+                    : `Incremento Atendidos (Jul-${MESES[mes - 1]})`}
                 </th>
                 <th scope="col" className="min-w-40 bg-emerald-900 px-4 py-3 text-right font-bold">
-                  Incremento % (Diferencia)
+                  {isProductivityIndicator
+                    ? `Tasa Julio-${MESES[mes - 1]}`
+                    : 'Incremento % (Diferencia)'}
                 </th>
                 <th scope="col" className="min-w-40 bg-amber-900 px-4 py-3 text-right font-bold">
-                  Compromiso Gestión (Meta)
+                  {isProductivityIndicator ? 'Rango normativo' : 'Compromiso Gestión (Meta)'}
                 </th>
                 <th scope="col" className="min-w-36 bg-[#0d4859] px-4 py-3 text-center font-bold">
                   Estado / Semáforo
@@ -916,7 +1226,9 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
             <tbody className="divide-y divide-slate-100 bg-white">
               {reporte.rows.map((row) => {
                 const porcentajeDiferencia = row.cobertura - row.porcentajeJunio
-                const semaforo = getEstadoSemaforo(row.avanceMeta)
+                const semaforo = isProductivityIndicator
+                  ? getProductivitySemaforo(row.tasaProductividad)
+                  : getEstadoSemaforo(row.avanceMeta)
                 return (
                   <tr key={row.id} className="hover:bg-slate-50/80">
                     <th scope="row" className="whitespace-nowrap px-4 py-4 text-left font-semibold text-slate-800">
@@ -929,22 +1241,28 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                       {formatNumber(row.primerSemestre)}
                     </td>
                     <td className="whitespace-nowrap bg-sky-50 px-4 py-4 text-right font-semibold text-sky-950">
-                      {formatPercentage(row.porcentajeJunio)}
+                      {isProductivityIndicator
+                        ? formatProductivityRate(row.porcentajeJunio)
+                        : formatPercentage(row.porcentajeJunio)}
                     </td>
                     <td className="whitespace-nowrap bg-emerald-50 px-4 py-4 text-right font-medium text-emerald-950">
                       {formatNumber(row.atendidos)}
                     </td>
                     <td className="whitespace-nowrap bg-emerald-50 px-4 py-4 text-right font-semibold text-emerald-950">
-                      {formatPercentage(row.cobertura)}
+                      {isProductivityIndicator
+                        ? formatProductivityRate(row.cobertura)
+                        : formatPercentage(row.cobertura)}
                     </td>
                     <td className="whitespace-nowrap bg-emerald-50 px-4 py-4 text-right text-emerald-950">
                       {formatNumber(row.incrementoAtendidos)}
                     </td>
                     <td className="whitespace-nowrap bg-emerald-50 px-4 py-4 text-right font-medium text-emerald-950">
-                      {formatPercentage(porcentajeDiferencia)}
+                      {isProductivityIndicator
+                        ? formatProductivityRate(row.porcentajeIncremento)
+                        : formatPercentage(porcentajeDiferencia)}
                     </td>
                     <td className="whitespace-nowrap bg-amber-50 px-4 py-4 text-right font-semibold text-amber-950">
-                      {formatPercentage(row.meta)}
+                      {isProductivityIndicator ? '0.00–1.00' : formatPercentage(row.meta)}
                     </td>
                     <td className="whitespace-nowrap px-4 py-4 text-center">
                       <span
@@ -997,7 +1315,9 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                   {establecimientoModal.nombre}
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Atenciones acumuladas hasta {MESES[mes - 1]} de {gestion}
+                  {isProductivityIndicator
+                    ? `Tasa mensual de actividades/consultas hasta ${MESES[mes - 1]} de ${gestion}`
+                    : `Atenciones acumuladas hasta ${MESES[mes - 1]} de ${gestion}`}
                 </p>
               </div>
               <button
@@ -1020,17 +1340,31 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                     <CartesianGrid stroke="#e2e8f0" strokeDasharray="4 4" vertical={false} />
                     <XAxis dataKey="mes" tick={{ fill: '#475569', fontSize: 12 }} />
                     <YAxis
-                      allowDecimals={false}
-                      tickFormatter={(value: number) => formatNumber(value)}
+                      unit={undefined}
+                      allowDecimals={isProductivityIndicator}
+                      domain={isProductivityIndicator ? [0, 1] : undefined}
+                      tickFormatter={(value: number) =>
+                        isProductivityIndicator ? formatProductivityRate(value) : formatNumber(value)
+                      }
                       tick={{ fill: '#64748b', fontSize: 12 }}
                       axisLine={false}
                       tickLine={false}
                     />
                     <Tooltip
-                      formatter={(value) => [formatNumber(Number(value)), 'Atendidos acumulados']}
+                      formatter={(value) => [
+                        isProductivityIndicator
+                          ? formatProductivityRate(value === null ? null : Number(value))
+                          : formatNumber(Number(value)),
+                        isProductivityIndicator ? 'Tasa del mes' : 'Atendidos acumulados',
+                      ]}
                       labelFormatter={(label) => `Mes: ${label}`}
                     />
-                    <Bar dataKey="atendidos" name="Atendidos acumulados" fill="#10b981" radius={[5, 5, 0, 0]} />
+                    <Bar
+                      dataKey="atendidos"
+                      name={isProductivityIndicator ? 'Tasa mensual' : 'Atendidos acumulados'}
+                      fill="#10b981"
+                      radius={[5, 5, 0, 0]}
+                    />
                   </BarChart>
                 </ResponsiveContainer>
               )}

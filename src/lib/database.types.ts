@@ -131,6 +131,7 @@ export interface Database {
           gestion: number
           mes: number
           valor_numerador: number
+          valor_denominador: number | null
         }
         Insert: {
           establecimiento_id: string
@@ -138,6 +139,7 @@ export interface Database {
           gestion: number
           mes: number
           valor_numerador: number
+          valor_denominador?: number | null
         }
         Update: {
           establecimiento_id?: string
@@ -145,6 +147,7 @@ export interface Database {
           gestion?: number
           mes?: number
           valor_numerador?: number
+          valor_denominador?: number | null
         }
         Relationships: []
       }

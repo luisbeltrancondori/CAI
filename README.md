@@ -22,7 +22,9 @@ El cliente tipado y el formulario esperan estas columnas:
 - `cai_operadores`: `id`, `nombre_completo`, `telefono`, `establecimiento_id`, `usuario`, `contrasena_hash`, `password_hash`, `created_at` (creada por la migración de autenticación; las dos columnas de contraseña guardan el mismo hash bcrypt para compatibilidad con esquemas existentes).
 - `cai_indicadores`: `id`, `grupo_id`, `numero_indicador`, `descripcion`, `numerador_explicacion`, `denominador_explicacion`.
 - `cai_config_establecimiento`: `establecimiento_id`, `indicador_id`, `gestion`, `compromiso_gestion`, `poblacion_programada`.
-- `cai_registros_mensuales`: `establecimiento_id`, `indicador_id`, `gestion`, `mes`, `valor_numerador`.
+- `cai_registros_mensuales`: `establecimiento_id`, `indicador_id`, `gestion`, `mes`, `valor_numerador` y `valor_denominador` (nullable; añadido por la migración de productividad).
+
+El Indicador 52 del grupo Odontología y otros indicadores identificados como productividad/cociente registran actividades y consultas por separado. El reporte calcula actividades ÷ consultas; para la evaluación normativa redondea la tasa a dos decimales y clasifica 0.00–0.25 como Bajo, 0.26–0.59 como Regular (incluye el intervalo 0.51–0.59), 0.60–0.75 como Bueno y desde 0.76 como Muy bueno. Para habilitar esta captura y los reportes, aplicar `supabase/migrations/20261026000000_add_monthly_denominator.sql`.
 
 Se asume que las claves `id`, `grupo_id`, `indicador_id` y `establecimiento_id` son UUID (texto) y que `mes` es un entero del 1 al 12. Las dos tablas de persistencia deben tener las restricciones únicas indicadas por los conflictos de upsert: `(establecimiento_id, indicador_id, gestion)` y `(establecimiento_id, indicador_id, gestion, mes)`.
 

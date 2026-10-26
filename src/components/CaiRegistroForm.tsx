@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { getSupabaseClient } from '../lib/supabaseClient'
 import type { Database } from '../lib/database.types'
+import { getProductivityLevel, isMonthlyProductivityIndicator } from '../lib/indicatorMetrics'
 
 type Indicador = Database['public']['Tables']['cai_indicadores']['Row']
 type Grupo = Database['public']['Tables']['cai_grupos']['Row']
@@ -55,6 +56,7 @@ export function CaiRegistroForm({
   const [compromiso, setCompromiso] = useState('')
   const [poblacion, setPoblacion] = useState('')
   const [numerador, setNumerador] = useState('')
+  const [denominador, setDenominador] = useState('')
   const [isLoadingIndicadores, setIsLoadingIndicadores] = useState(false)
   const [isLoadingConfig, setIsLoadingConfig] = useState(false)
   const [isLoadingRegistro, setIsLoadingRegistro] = useState(false)
@@ -69,6 +71,7 @@ export function CaiRegistroForm({
     setCompromiso('')
     setPoblacion('')
     setNumerador('')
+    setDenominador('')
 
     if (!grupoId) {
       setIsLoadingIndicadores(false)
@@ -120,6 +123,13 @@ export function CaiRegistroForm({
       }
     }
 
+    if (isMonthlyProductivityIndicator(indicadores.find((item) => item.id === indicadorId), grupos)) {
+      setIsLoadingConfig(false)
+      return () => {
+        active = false
+      }
+    }
+
     async function loadConfig() {
       setIsLoadingConfig(true)
       try {
@@ -148,11 +158,12 @@ export function CaiRegistroForm({
     return () => {
       active = false
     }
-  }, [establecimientoId, gestion, indicadorId])
+  }, [establecimientoId, gestion, indicadorId, indicadores, grupos])
 
   useEffect(() => {
     let active = true
     setNumerador('')
+    setDenominador('')
 
     if (!indicadorId || !mes) {
       setIsLoadingRegistro(false)
@@ -166,14 +177,17 @@ export function CaiRegistroForm({
       try {
         const { data, error } = await getSupabaseClient()
           .from('cai_registros_mensuales')
-          .select('valor_numerador')
+          .select('valor_numerador, valor_denominador')
           .eq('establecimiento_id', establecimientoId)
           .eq('indicador_id', indicadorId)
           .eq('gestion', gestion)
           .eq('mes', Number(mes))
           .maybeSingle()
         if (error) throw error
-        if (active && data) setNumerador(String(data.valor_numerador))
+        if (active && data) {
+          setNumerador(String(data.valor_numerador))
+          setDenominador(data.valor_denominador === null ? '' : String(data.valor_denominador))
+        }
       } catch (error) {
         if (active) {
           setNotice({ type: 'error', text: `No se pudo cargar el registro mensual: ${errorMessage(error)}` })
@@ -190,10 +204,24 @@ export function CaiRegistroForm({
   }, [establecimientoId, gestion, indicadorId, mes])
 
   const indicadorSeleccionado = indicadores.find((item) => item.id === indicadorId)
+  const isProductivity = isMonthlyProductivityIndicator(indicadorSeleccionado, grupos)
+  const denominatorValue = Number(denominador)
+  const monthlyNumerator = Number(numerador)
+  const productivityRate =
+    numerador.trim() !== '' &&
+    denominador.trim() !== '' &&
+    Number.isFinite(monthlyNumerator) &&
+    monthlyNumerator >= 0 &&
+    Number.isFinite(denominatorValue) &&
+    denominatorValue > 0
+      ? monthlyNumerator / denominatorValue
+      : null
+  const productivityLevel = getProductivityLevel(productivityRate)
 
   function handleIndicadorChange(value: string) {
     setNotice(undefined)
     setIndicadorId(value)
+    setDenominador('')
   }
 
   function handleMesChange(value: string) {
@@ -213,20 +241,27 @@ export function CaiRegistroForm({
     const compromisoValue = Number(compromiso)
     const poblacionValue = Number(poblacion)
     const numeradorValue = Number(numerador)
+    const monthlyDenominator = Number(denominador)
 
-    if (
+    const hasInvalidMonthlyValues =
       !indicadorId ||
       !mes ||
+      numerador.trim() === '' ||
+      !Number.isFinite(numeradorValue) ||
+      numeradorValue < 0 ||
+      (isProductivity &&
+        (denominador.trim() === '' ||
+          !Number.isFinite(monthlyDenominator) ||
+          monthlyDenominator < 0))
+    const hasInvalidAnnualValues =
       compromiso.trim() === '' ||
       poblacion.trim() === '' ||
-      numerador.trim() === '' ||
       !Number.isFinite(compromisoValue) ||
       !Number.isFinite(poblacionValue) ||
-      !Number.isFinite(numeradorValue) ||
       compromisoValue < 0 ||
-      poblacionValue < 0 ||
-      numeradorValue < 0
-    ) {
+      poblacionValue < 0
+
+    if (hasInvalidMonthlyValues || (!isProductivity && hasInvalidAnnualValues)) {
       setNotice({ type: 'error', text: 'Complete todos los campos con valores numéricos válidos, iguales o mayores a cero.' })
       return
     }
@@ -234,20 +269,22 @@ export function CaiRegistroForm({
     setIsSaving(true)
     try {
       const supabase = getSupabaseClient()
-      const { error: configError } = await supabase
-        .from('cai_config_establecimiento')
-        .upsert(
-          {
-            establecimiento_id: establecimientoId,
-            indicador_id: indicadorId,
-            gestion,
-            compromiso_gestion: compromisoValue,
-            poblacion_programada: poblacionValue,
-          },
-          { onConflict: 'establecimiento_id,indicador_id,gestion' },
-        )
+      if (!isProductivity) {
+        const { error: configError } = await supabase
+          .from('cai_config_establecimiento')
+          .upsert(
+            {
+              establecimiento_id: establecimientoId,
+              indicador_id: indicadorId,
+              gestion,
+              compromiso_gestion: compromisoValue,
+              poblacion_programada: poblacionValue,
+            },
+            { onConflict: 'establecimiento_id,indicador_id,gestion' },
+          )
 
-      if (configError) throw new Error(`No se pudo guardar la configuración anual: ${configError.message}`)
+        if (configError) throw new Error(`No se pudo guardar la configuración anual: ${configError.message}`)
+      }
 
       const { error: registroError } = await supabase
         .from('cai_registros_mensuales')
@@ -258,6 +295,7 @@ export function CaiRegistroForm({
             gestion,
             mes: Number(mes),
             valor_numerador: numeradorValue,
+            valor_denominador: isProductivity ? monthlyDenominator : null,
           },
           { onConflict: 'establecimiento_id,indicador_id,gestion,mes' },
         )
@@ -268,7 +306,12 @@ export function CaiRegistroForm({
         )
       }
 
-      setNotice({ type: 'success', text: 'La configuración y el registro mensual se guardaron correctamente.' })
+      setNotice({
+        type: 'success',
+        text: isProductivity
+          ? 'El registro mensual de productividad se guardó correctamente.'
+          : 'La configuración y el registro mensual se guardaron correctamente.',
+      })
     } catch (error) {
       setNotice({ type: 'error', text: errorMessage(error) })
     } finally {
@@ -370,6 +413,7 @@ export function CaiRegistroForm({
         </section>
       )}
 
+      {!isProductivity && (
       <section aria-labelledby="config-heading" className="space-y-5">
         <div>
           <h2 id="config-heading" className="text-lg font-semibold text-slate-900">
@@ -384,8 +428,8 @@ export function CaiRegistroForm({
               className={inputClassName}
               type="number"
               min="0"
-              step="any"
-              inputMode="decimal"
+              step={isProductivity ? '1' : 'any'}
+              inputMode={isProductivity ? 'numeric' : 'decimal'}
               placeholder="Ej. 0.96"
               value={compromiso}
               onChange={(event) => setCompromiso(event.target.value)}
@@ -411,6 +455,7 @@ export function CaiRegistroForm({
         </div>
         {isLoadingConfig && <p className="text-xs text-slate-500">Consultando configuración guardada…</p>}
       </section>
+      )}
 
       <section aria-labelledby="mensual-heading" className="space-y-5">
         <div>
@@ -438,13 +483,15 @@ export function CaiRegistroForm({
             </select>
           </label>
           <label className="block text-sm font-medium text-slate-700">
-            Numerador alcanzado en el mes
+            {isProductivity
+              ? 'Total actividades clínicas realizadas'
+              : 'Numerador alcanzado en el mes'}
             <input
               className={inputClassName}
               type="number"
               min="0"
-              step="any"
-              inputMode="decimal"
+              step="1"
+              inputMode="numeric"
               placeholder="Ingrese el valor alcanzado"
               value={numerador}
               onChange={(event) => setNumerador(event.target.value)}
@@ -452,7 +499,43 @@ export function CaiRegistroForm({
               required
             />
           </label>
+          {isProductivity && (
+            <label className="block text-sm font-medium text-slate-700">
+              Total de consultas (Nuevas y Repetidas)
+              <input
+                className={inputClassName}
+                type="number"
+                min="0"
+                step="any"
+                inputMode="decimal"
+                placeholder="Ingrese el total de consultas"
+                value={denominador}
+                onChange={(event) => setDenominador(event.target.value)}
+                disabled={!mes || isLoadingRegistro}
+                required
+              />
+            </label>
+          )}
         </div>
+        {isProductivity && (
+          <div
+            className="rounded-xl border border-cai-100 bg-cai-50 px-4 py-3 text-sm text-cai-900"
+            aria-live="polite"
+          >
+            <p className="font-semibold">
+              Tasa del mes:{' '}
+              {productivityRate === null ? 'No evaluable (sin consultas)' : productivityRate.toFixed(2)}
+              {' · '}
+              {productivityLevel}
+            </p>
+            <p className="mt-1 text-xs text-cai-800">
+              Se calcula como actividades clínicas ÷ consultas. El registro conserva ambos valores.
+            </p>
+            <p className="mt-1 text-xs text-cai-800">
+              Rangos: Bajo 0–0.25 · Regular 0.26–0.59 · Bueno 0.60–0.75 · Muy bueno 0.76–1.00.
+            </p>
+          </div>
+        )}
         {isLoadingRegistro && <p className="text-xs text-slate-500">Consultando registro mensual…</p>}
       </section>
 
