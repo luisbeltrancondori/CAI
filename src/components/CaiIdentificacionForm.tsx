@@ -323,6 +323,7 @@ export function CaiIdentificacionForm({ onIdentified }: CaiIdentificacionFormPro
             </button>
           </p>
           <p className="text-center text-xs text-slate-400">Compromisos de Gestión CAI · Gestión 2026</p>
+          
         </form>
       </div>
     </main>

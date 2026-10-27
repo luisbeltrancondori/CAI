@@ -515,7 +515,7 @@ export function App() {
           )}
 
           <footer className="py-6 text-center text-xs text-slate-400">
-            Secretaría Municipal de Salud · Sistema SICOFS
+            Secretaría Municipal de Salud · Sistema SICOFS - Soluciones Informáticas LBC · 📱 62108877
           </footer>
         </main>
       </div>
