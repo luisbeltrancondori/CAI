@@ -11,6 +11,10 @@ export type CaiSession = {
   establecimientoNombre: string
 }
 
+export type CaiAdminSession = {
+  email: string
+}
+
 type Establecimiento = Pick<
   Database['public']['Tables']['cai_establecimientos']['Row'],
   'id' | 'nombre'
@@ -18,9 +22,10 @@ type Establecimiento = Pick<
 
 type CaiIdentificacionFormProps = {
   onIdentified: (session: CaiSession) => void
+  onAdminIdentified: (session: CaiAdminSession) => void
 }
 
-type AuthMode = 'login' | 'register'
+type AuthMode = 'login' | 'register' | 'admin'
 
 const inputClassName =
   'mt-2 block w-full rounded-xl border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 shadow-sm transition placeholder:text-slate-400 focus:border-cai-600 focus:ring-cai-600 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400'
@@ -42,10 +47,11 @@ function errorCode(error: unknown): string | undefined {
   return undefined
 }
 
-export function CaiIdentificacionForm({ onIdentified }: CaiIdentificacionFormProps) {
+export function CaiIdentificacionForm({ onIdentified, onAdminIdentified }: CaiIdentificacionFormProps) {
   const [establecimientos, setEstablecimientos] = useState<Establecimiento[]>([])
   const [mode, setMode] = useState<AuthMode>('login')
   const [nombreCompleto, setNombreCompleto] = useState('')
+  const [cedula, setCedula] = useState('')
   const [telefono, setTelefono] = useState('')
   const [establecimientoId, setEstablecimientoId] = useState('')
   const [usuario, setUsuario] = useState('')
@@ -53,6 +59,7 @@ export function CaiIdentificacionForm({ onIdentified }: CaiIdentificacionFormPro
   const [isLoadingEstablecimientos, setIsLoadingEstablecimientos] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [registrationMessage, setRegistrationMessage] = useState('')
   const [establecimientosError, setEstablecimientosError] = useState('')
 
   useEffect(() => {
@@ -85,6 +92,7 @@ export function CaiIdentificacionForm({ onIdentified }: CaiIdentificacionFormPro
   function switchMode(nextMode: AuthMode) {
     setMode(nextMode)
     setError('')
+    setRegistrationMessage('')
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -106,6 +114,10 @@ export function CaiIdentificacionForm({ onIdentified }: CaiIdentificacionFormPro
         setError('Ingrese el nombre completo del operador.')
         return
       }
+      if (!cedula.trim()) {
+        setError('Ingrese el número de cédula.')
+        return
+      }
       if (!establecimientos.find((item) => item.id === establecimientoId)) {
         setError('Seleccione un centro de salud válido.')
         return
@@ -115,6 +127,30 @@ export function CaiIdentificacionForm({ onIdentified }: CaiIdentificacionFormPro
     setIsSubmitting(true)
     try {
       const supabase = getSupabaseClient()
+      if (mode === 'admin') {
+        const { data, error: loginError } = await supabase.auth.signInWithPassword({
+          email: normalizedUsuario,
+          password: contrasena,
+        })
+        if (loginError) throw loginError
+        const { data: isAuthorized, error: authorizationError } = await supabase.rpc(
+          'cai_admin_es_autorizado',
+        )
+        if (authorizationError) {
+          const { error: signOutError } = await supabase.auth.signOut()
+          if (signOutError) throw signOutError
+          throw authorizationError
+        }
+        if (!isAuthorized) {
+          const { error: signOutError } = await supabase.auth.signOut()
+          if (signOutError) throw signOutError
+          setError('Esta cuenta no está autorizada como Administrador.')
+          return
+        }
+        onAdminIdentified({ email: data.user.email ?? normalizedUsuario })
+        return
+      }
+
       if (mode === 'login') {
         const { data, error: loginError } = await supabase.rpc('cai_operador_login', {
           p_usuario: normalizedUsuario,
@@ -124,6 +160,14 @@ export function CaiIdentificacionForm({ onIdentified }: CaiIdentificacionFormPro
         const operator = data?.[0]
         if (!operator) {
           setError('Usuario o contraseña incorrectos.')
+          return
+        }
+        if (operator.estado !== 'activo') {
+          setError(
+            operator.estado === 'pendiente'
+              ? 'Su cuenta aún se encuentra pendiente de aprobación por el Administrador de la Secretaría de Salud.'
+              : 'Esta cuenta no está activa. Comuníquese con el Administrador de la Secretaría de Salud.',
+          )
           return
         }
         onIdentified({
@@ -139,6 +183,7 @@ export function CaiIdentificacionForm({ onIdentified }: CaiIdentificacionFormPro
 
       const { data, error: registerError } = await supabase.rpc('cai_operador_registrar', {
         p_nombre_completo: nombreCompleto.trim(),
+        p_cedula: cedula.trim(),
         p_telefono: telefono.trim(),
         p_establecimiento_id: establecimientoId,
         p_usuario: normalizedUsuario,
@@ -148,20 +193,22 @@ export function CaiIdentificacionForm({ onIdentified }: CaiIdentificacionFormPro
       const operator = data?.[0]
       if (!operator) throw new Error('El registro no devolvió los datos del operador.')
 
-      onIdentified({
-        operadorId: operator.id,
-        usuario: operator.usuario,
-        responsable: operator.nombre_completo,
-        telefono: operator.telefono ?? '',
-        establecimientoId: operator.establecimiento_id,
-        establecimientoNombre: operator.establecimiento_nombre,
-      })
+      setRegistrationMessage(
+        '¡Registro completado! Su cuenta está pendiente de aprobación por el Administrador de la Secretaría de Salud. Podrá iniciar sesión una vez sea autorizada.',
+      )
+      setMode('login')
+      setContrasena('')
+      setCedula('')
     } catch (submitError) {
       const message = errorMessage(submitError)
       if (mode === 'login' && errorCode(submitError) === '28000') {
         setError('Usuario o contraseña incorrectos.')
       } else if (mode === 'register' && errorCode(submitError) === '23505') {
-        setError('Ese nombre de usuario ya está registrado.')
+        setError(
+          message.includes('cai_operadores_cedula')
+            ? 'Ese número de cédula ya tiene una solicitud o cuenta registrada.'
+            : 'Ese nombre de usuario ya está registrado.',
+        )
       } else {
         setError(message)
       }
@@ -194,14 +241,29 @@ export function CaiIdentificacionForm({ onIdentified }: CaiIdentificacionFormPro
         >
           <div>
             <h2 className="text-xl font-bold text-slate-900">
-              {mode === 'login' ? 'Iniciar sesión' : 'Crear cuenta de operador'}
+              {mode === 'login'
+                ? 'Iniciar sesión'
+                : mode === 'admin'
+                  ? 'Acceso administrador'
+                  : 'Crear cuenta de operador'}
             </h2>
             <p className="mt-1 text-sm text-slate-500">
               {mode === 'login'
                 ? 'Ingrese sus credenciales para acceder al sistema.'
-                : 'Registre sus datos para ingresar al sistema CAI.'}
+                : mode === 'admin'
+                  ? 'Ingrese con su cuenta institucional de Supabase Auth.'
+                  : 'Registre sus datos para ingresar al sistema CAI.'}
             </p>
           </div>
+
+          {registrationMessage && (
+            <div
+              role="status"
+              className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900"
+            >
+              {registrationMessage}
+            </div>
+          )}
 
           {error && (
             <div
@@ -223,6 +285,20 @@ export function CaiIdentificacionForm({ onIdentified }: CaiIdentificacionFormPro
                   placeholder="Ingrese su nombre completo"
                   value={nombreCompleto}
                   onChange={(event) => setNombreCompleto(event.target.value)}
+                  required
+                />
+              </label>
+
+              <label className="block text-sm font-medium text-slate-700">
+                Cédula de identidad
+                <input
+                  className={inputClassName}
+                  type="text"
+                  autoComplete="off"
+                  inputMode="text"
+                  placeholder="Ingrese su número de cédula"
+                  value={cedula}
+                  onChange={(event) => setCedula(event.target.value)}
                   required
                 />
               </label>
@@ -272,12 +348,12 @@ export function CaiIdentificacionForm({ onIdentified }: CaiIdentificacionFormPro
           )}
 
           <label className="block text-sm font-medium text-slate-700">
-            Usuario
+            {mode === 'admin' ? 'Correo de administrador' : 'Usuario'}
             <input
               className={inputClassName}
-              type="text"
-              autoComplete="username"
-              placeholder="Ingrese su usuario"
+              type={mode === 'admin' ? 'email' : 'text'}
+              autoComplete={mode === 'admin' ? 'email' : 'username'}
+              placeholder={mode === 'admin' ? 'Ingrese su correo institucional' : 'Ingrese su usuario'}
               value={usuario}
               onChange={(event) => setUsuario(event.target.value)}
               required
@@ -289,8 +365,8 @@ export function CaiIdentificacionForm({ onIdentified }: CaiIdentificacionFormPro
             <input
               className={inputClassName}
               type="password"
-              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-              placeholder={mode === 'login' ? 'Ingrese su contraseña' : 'Mínimo 8 caracteres'}
+              autoComplete={mode !== 'register' ? 'current-password' : 'new-password'}
+              placeholder={mode === 'register' ? 'Mínimo 8 caracteres' : 'Ingrese su contraseña'}
               minLength={mode === 'register' ? 8 : undefined}
               value={contrasena}
               onChange={(event) => setContrasena(event.target.value)}
@@ -308,20 +384,54 @@ export function CaiIdentificacionForm({ onIdentified }: CaiIdentificacionFormPro
             className="inline-flex w-full items-center justify-center rounded-xl bg-[#0d4859] px-5 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0a3947] focus:outline-none focus:ring-2 focus:ring-[#0d4859] focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             {isSubmitting
-              ? mode === 'login' ? 'Ingresando…' : 'Registrando…'
-              : mode === 'login' ? 'Iniciar sesión' : 'Registrarse'}
+              ? mode === 'register' ? 'Registrando…' : 'Ingresando…'
+              : mode === 'register' ? 'Registrarse' : mode === 'admin' ? 'Ingresar como administrador' : 'Iniciar sesión'}
           </button>
 
           <p className="text-center text-sm text-slate-600">
-            {mode === 'login' ? '¿No tiene una cuenta?' : '¿Ya tiene una cuenta?'}{' '}
-            <button
-              type="button"
-              onClick={() => switchMode(mode === 'login' ? 'register' : 'login')}
-              className="font-semibold text-cai-700 underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-cai-600"
-            >
-              {mode === 'login' ? 'Registrarse' : 'Iniciar sesión'}
-            </button>
+            {mode === 'login' ? (
+              <>
+                ¿No tiene una cuenta?{' '}
+                <button
+                  type="button"
+                  onClick={() => switchMode('register')}
+                  className="font-semibold text-cai-700 underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-cai-600"
+                >
+                  Registrarse
+                </button>
+              </>
+            ) : mode === 'register' ? (
+              <>
+                ¿Ya tiene una cuenta?{' '}
+                <button
+                  type="button"
+                  onClick={() => switchMode('login')}
+                  className="font-semibold text-cai-700 underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-cai-600"
+                >
+                  Iniciar sesión
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => switchMode('login')}
+                className="font-semibold text-cai-700 underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-cai-600"
+              >
+                Volver al acceso de operadores
+              </button>
+            )}
           </p>
+          {mode === 'login' && (
+            <p className="text-center text-sm text-slate-600">
+              <button
+                type="button"
+                onClick={() => switchMode('admin')}
+                className="font-semibold text-cai-700 underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-cai-600"
+              >
+                Acceso administrador
+              </button>
+            </p>
+          )}
           <p className="text-center text-xs text-slate-400">Compromisos de Gestión CAI · Gestión 2026</p>
           
         </form>

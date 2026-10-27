@@ -31,6 +31,8 @@ export interface Database {
           usuario: string
           contrasena_hash: string | null
           password_hash: string | null
+          cedula: string | null
+          estado: string
           created_at: string
         }
         Insert: {
@@ -41,6 +43,8 @@ export interface Database {
           usuario: string
           contrasena_hash?: string | null
           password_hash?: string | null
+          cedula?: string | null
+          estado?: string
           created_at?: string
         }
         Update: {
@@ -51,6 +55,8 @@ export interface Database {
           usuario?: string
           contrasena_hash?: string
           password_hash?: string | null
+          cedula?: string | null
+          estado?: string
           created_at?: string
         }
         Relationships: []
@@ -166,11 +172,13 @@ export interface Database {
           establecimiento_id: string
           establecimiento_nombre: string
           usuario: string
+          estado: string
         }[]
       }
       cai_operador_registrar: {
         Args: {
           p_nombre_completo: string
+          p_cedula: string
           p_telefono: string
           p_establecimiento_id: string
           p_usuario: string
@@ -183,7 +191,30 @@ export interface Database {
           establecimiento_id: string
           establecimiento_nombre: string
           usuario: string
+          estado: string
         }[]
+      }
+      cai_admin_es_autorizado: {
+        Args: Record<PropertyKey, never>
+        Returns: boolean
+      }
+      cai_admin_solicitudes_pendientes: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          id: string
+          nombre_completo: string
+          cedula: string | null
+          telefono: string | null
+          establecimiento_nombre: string
+          created_at: string
+        }[]
+      }
+      cai_admin_resolver_solicitud: {
+        Args: {
+          p_operador_id: string
+          p_aprobar: boolean
+        }
+        Returns: string
       }
     }
     Enums: Record<string, never>

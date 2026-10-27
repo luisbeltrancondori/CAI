@@ -9,7 +9,12 @@ import {
   PanelLeftOpen,
   X,
 } from 'lucide-react'
-import { CaiIdentificacionForm, type CaiSession } from './components/CaiIdentificacionForm'
+import {
+  CaiIdentificacionForm,
+  type CaiAdminSession,
+  type CaiSession,
+} from './components/CaiIdentificacionForm'
+import { CaiAprobaciones } from './components/CaiAprobaciones'
 import { CaiRegistroForm } from './components/CaiRegistroForm'
 import { getSupabaseClient } from './lib/supabaseClient'
 import type { Database } from './lib/database.types'
@@ -262,6 +267,9 @@ function InstitutionalBanner() {
 
 export function App() {
   const [session, setSession] = useState<CaiSession | null>(readStoredSession)
+  const [adminEmail, setAdminEmail] = useState('')
+  const [isCheckingAdminSession, setIsCheckingAdminSession] = useState(true)
+  const [adminAuthError, setAdminAuthError] = useState('')
   const [grupos, setGrupos] = useState<Grupo[]>([])
   const [grupoActivoId, setGrupoActivoId] = useState('')
   const [activeView, setActiveView] = useState<ActiveView>('inicio')
@@ -269,6 +277,46 @@ export function App() {
   const [gruposError, setGruposError] = useState('')
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
+
+  useEffect(() => {
+    let active = true
+
+    async function restoreAdminSession() {
+      try {
+        const supabase = getSupabaseClient()
+        const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+        if (sessionError) throw sessionError
+        if (!sessionData.session) return
+
+        const { data: isAuthorized, error: authorizationError } = await supabase.rpc(
+          'cai_admin_es_autorizado',
+        )
+        if (authorizationError) throw authorizationError
+        if (!isAuthorized) {
+          const { error: signOutError } = await supabase.auth.signOut()
+          if (signOutError) throw signOutError
+          return
+        }
+
+        if (active) setAdminEmail(sessionData.session.user.email ?? 'Administrador')
+      } catch (error) {
+        if (active) {
+          setAdminAuthError(
+            `No se pudo validar el acceso administrativo: ${
+              error instanceof Error ? error.message : 'Ocurrió un error inesperado.'
+            }`,
+          )
+        }
+      } finally {
+        if (active) setIsCheckingAdminSession(false)
+      }
+    }
+
+    void restoreAdminSession()
+    return () => {
+      active = false
+    }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -315,6 +363,27 @@ export function App() {
     setSession(nextSession)
   }
 
+  function handleAdminIdentified(adminSession: CaiAdminSession) {
+    localStorage.removeItem(SESSION_STORAGE_KEY)
+    setSession(null)
+    setAdminAuthError('')
+    setAdminEmail(adminSession.email)
+  }
+
+  async function handleAdminLogout() {
+    try {
+      const { error } = await getSupabaseClient().auth.signOut()
+      if (error) throw error
+      setAdminEmail('')
+    } catch (error) {
+      setAdminAuthError(
+        `No se pudo cerrar la sesión administrativa: ${
+          error instanceof Error ? error.message : 'Ocurrió un error inesperado.'
+        }`,
+      )
+    }
+  }
+
   function handleLogout() {
     localStorage.removeItem('sicofs_operador')
     setSession(null)
@@ -340,8 +409,41 @@ export function App() {
     setIsMobileMenuOpen(false)
   }
 
+  if (isCheckingAdminSession) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
+        <p className="text-sm text-slate-600">Validando acceso…</p>
+      </main>
+    )
+  }
+
+  if (adminEmail) {
+    return (
+      <CaiAprobaciones
+        adminEmail={adminEmail}
+        error={adminAuthError}
+        onSignOut={() => void handleAdminLogout()}
+      />
+    )
+  }
+
   if (!session) {
-    return <CaiIdentificacionForm onIdentified={handleIdentified} />
+    return (
+      <>
+        {adminAuthError && (
+          <div
+            role="alert"
+            className="fixed inset-x-4 top-4 z-10 mx-auto max-w-md rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"
+          >
+            {adminAuthError}
+          </div>
+        )}
+        <CaiIdentificacionForm
+          onIdentified={handleIdentified}
+          onAdminIdentified={handleAdminIdentified}
+        />
+      </>
+    )
   }
 
   const navigationProps: SidebarProps = {

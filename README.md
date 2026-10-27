@@ -6,10 +6,24 @@ Interfaz React + TypeScript + Tailwind CSS para registrar la configuración anua
 
 1. Instale dependencias con `npm install`.
 2. Copie `.env.example` a `.env` y complete `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY`.
-3. Aplique las migraciones de `supabase/migrations` al proyecto Supabase (por ejemplo, con `supabase db push`). Para un proyecto donde la RPC ya existía antes de agregar `password_hash`, aplique también `20261023000200_sync_operator_password_hashes.sql`.
+3. Aplique las migraciones de `supabase/migrations` al proyecto Supabase (por ejemplo, con `supabase db push`). Para un proyecto donde la RPC ya existía antes de agregar `password_hash`, aplique también `20261023000200_sync_operator_password_hashes.sql`. La migración `20261027000000_manual_operator_approval.sql` conserva como activos a los operadores ya registrados y deja pendientes los nuevos.
 4. Ejecute `npm run dev`; para verificar la compilación de producción, ejecute `npm run build`.
 
-El acceso admite inicio de sesión y registro de operadores. Los datos del perfil y establecimiento seleccionados se conservan en `localStorage` bajo la clave `sicofs_operador`. Las contraseñas no se guardan en texto plano: se almacenan como hashes bcrypt generados en PostgreSQL y se verifican mediante funciones RPC `SECURITY DEFINER`. La tabla no concede acceso directo a `anon` ni `authenticated`; aplique la migración SQL antes de usar el formulario.
+El acceso admite inicio de sesión y registro de operadores. Los registros nuevos requieren cédula y quedan en estado `pendiente`; solo los operadores `activo` pueden acceder. Los datos de perfil y establecimiento de los operadores se conservan en `localStorage` bajo la clave `sicofs_operador`. Las contraseñas de operadores no se guardan en texto plano: se almacenan como hashes bcrypt generados en PostgreSQL y se verifican mediante funciones RPC `SECURITY DEFINER`. La tabla `cai_operadores` no concede acceso directo a `anon` ni `authenticated`; aplique las migraciones SQL antes de usar el formulario.
+
+### Aprobar operadores
+
+El panel de aprobación se autentica con Supabase Auth y cada operación se vuelve a autorizar en el servidor mediante `auth.uid()`; no se debe exponer una clave `service_role` en el frontend. Para habilitar al administrador:
+
+1. Cree una cuenta del administrador en **Supabase Dashboard → Authentication → Users** (o use una cuenta Auth institucional existente) y habilite el acceso por contraseña.
+2. Copie el UUID de esa cuenta e insértelo en SQL Editor de Supabase:
+
+   ```sql
+   insert into public.cai_administradores (auth_user_id)
+   values ('UUID-DE-LA-CUENTA-AUTH');
+   ```
+
+3. Inicie sesión desde **Acceso administrador** en la aplicación. La lista muestra exclusivamente solicitudes pendientes y permite aprobarlas (`activo`) o rechazarlas (`rechazado`). Las RPC protegidas verifican el rol en base de datos en cada lectura y cambio de estado.
 
 El panel principal incluye una vista INICIO, reportes y registro de datos; los grupos ordenados por `orden` se muestran en una barra lateral responsiva con acordeón y modo compacto. El encabezado institucional utiliza los logos del GAM Montero y del SUS.
 
