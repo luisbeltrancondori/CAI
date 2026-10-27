@@ -1,7 +1,13 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { getSupabaseClient } from '../lib/supabaseClient'
 import type { Database } from '../lib/database.types'
-import { getProductivityLevel, isMonthlyProductivityIndicator } from '../lib/indicatorMetrics'
+import {
+  calculateDropoutRate,
+  getDropoutSourceIndicators,
+  getProductivityLevel,
+  isCalculatedDropoutIndicator,
+  isMonthlyProductivityIndicator,
+} from '../lib/indicatorMetrics'
 
 type Indicador = Database['public']['Tables']['cai_indicadores']['Row']
 type Grupo = Database['public']['Tables']['cai_grupos']['Row']
@@ -57,11 +63,21 @@ export function CaiRegistroForm({
   const [poblacion, setPoblacion] = useState('')
   const [numerador, setNumerador] = useState('')
   const [denominador, setDenominador] = useState('')
+  const [dosisPrimera, setDosisPrimera] = useState<number | null>(null)
+  const [dosisSegunda, setDosisSegunda] = useState<number | null>(null)
+  const [isLoadingDesercion, setIsLoadingDesercion] = useState(false)
   const [isLoadingIndicadores, setIsLoadingIndicadores] = useState(false)
   const [isLoadingConfig, setIsLoadingConfig] = useState(false)
   const [isLoadingRegistro, setIsLoadingRegistro] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string }>()
+  const indicadorSeleccionado = indicadores.find((item) => item.id === indicadorId)
+  const isCalculatedDropout = isCalculatedDropoutIndicator(indicadorSeleccionado)
+  const isSrpDropout = Number(indicadorSeleccionado?.numero_indicador) === 14
+  const isProductivity = isMonthlyProductivityIndicator(indicadorSeleccionado, grupos)
+  const dropoutRate = dosisPrimera === null || dosisSegunda === null
+    ? null
+    : calculateDropoutRate(dosisPrimera, dosisSegunda)
 
   useEffect(() => {
     let active = true
@@ -72,6 +88,8 @@ export function CaiRegistroForm({
     setPoblacion('')
     setNumerador('')
     setDenominador('')
+    setDosisPrimera(null)
+    setDosisSegunda(null)
 
     if (!grupoId) {
       setIsLoadingIndicadores(false)
@@ -86,7 +104,6 @@ export function CaiRegistroForm({
         const { data, error } = await getSupabaseClient()
           .from('cai_indicadores')
           .select('id, grupo_id, numero_indicador, descripcion, numerador_explicacion, denominador_explicacion')
-          .eq('grupo_id', grupoId)
         if (error) throw error
         if (active) {
           const indicadoresOrdenados = (data ?? []).sort((a, b) => {
@@ -123,7 +140,11 @@ export function CaiRegistroForm({
       }
     }
 
-    if (isMonthlyProductivityIndicator(indicadores.find((item) => item.id === indicadorId), grupos)) {
+    const selectedIndicator = indicadores.find((item) => item.id === indicadorId)
+    if (
+      isMonthlyProductivityIndicator(selectedIndicator, grupos) ||
+      isCalculatedDropoutIndicator(selectedIndicator)
+    ) {
       setIsLoadingConfig(false)
       return () => {
         active = false
@@ -164,9 +185,69 @@ export function CaiRegistroForm({
     let active = true
     setNumerador('')
     setDenominador('')
+    setDosisPrimera(null)
+    setDosisSegunda(null)
 
     if (!indicadorId || !mes) {
       setIsLoadingRegistro(false)
+      setIsLoadingDesercion(false)
+      return () => {
+        active = false
+      }
+    }
+
+    const selectedIndicator = indicadores.find((item) => item.id === indicadorId)
+    if (isCalculatedDropoutIndicator(selectedIndicator)) {
+      const { firstDose, finalDose } = getDropoutSourceIndicators(selectedIndicator, indicadores)
+      if (!firstDose || !finalDose) {
+        setIsLoadingDesercion(false)
+        setNotice({
+          type: 'error',
+          text: isSrpDropout
+            ? 'No se encontraron los indicadores 12 y 13 en el catálogo.'
+            : 'No se encontró el indicador 57 o no se pudo identificar de forma única la 3ra dosis pentavalente.',
+        })
+        return () => {
+          active = false
+        }
+      }
+      const firstDoseIndicatorId = firstDose.id
+      const finalDoseIndicatorId = finalDose.id
+
+      async function loadSrpDoseTotals() {
+        setIsLoadingDesercion(true)
+        try {
+          const { data, error } = await getSupabaseClient()
+            .from('cai_registros_mensuales')
+            .select('indicador_id, valor_numerador')
+            .eq('establecimiento_id', establecimientoId)
+            .eq('gestion', gestion)
+            .lte('mes', Number(mes))
+            .in('indicador_id', [firstDoseIndicatorId, finalDoseIndicatorId])
+          if (error) throw error
+          if (active) {
+            const firstDoses = (data ?? [])
+              .filter((record) => record.indicador_id === firstDoseIndicatorId)
+              .reduce((total, record) => total + Number(record.valor_numerador || 0), 0)
+            const secondDoses = (data ?? [])
+              .filter((record) => record.indicador_id === finalDoseIndicatorId)
+              .reduce((total, record) => total + Number(record.valor_numerador || 0), 0)
+            setDosisPrimera(firstDoses)
+            setDosisSegunda(secondDoses)
+          }
+        } catch (error) {
+          if (active) {
+            setNotice({
+              type: 'error',
+              text: `No se pudieron calcular las dosis del indicador de deserción: ${errorMessage(error)}`,
+            })
+          }
+        } finally {
+          if (active) setIsLoadingDesercion(false)
+        }
+      }
+
+      void loadSrpDoseTotals()
       return () => {
         active = false
       }
@@ -201,10 +282,8 @@ export function CaiRegistroForm({
     return () => {
       active = false
     }
-  }, [establecimientoId, gestion, indicadorId, mes])
+  }, [establecimientoId, gestion, indicadorId, mes, indicadores])
 
-  const indicadorSeleccionado = indicadores.find((item) => item.id === indicadorId)
-  const isProductivity = isMonthlyProductivityIndicator(indicadorSeleccionado, grupos)
   const denominatorValue = Number(denominador)
   const monthlyNumerator = Number(numerador)
   const productivityRate =
@@ -232,6 +311,14 @@ export function CaiRegistroForm({
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setNotice(undefined)
+
+    if (isCalculatedDropout) {
+      setNotice({
+        type: 'error',
+        text: `El Indicador ${indicadorSeleccionado?.numero_indicador} es calculado automáticamente y no admite registros manuales.`,
+      })
+      return
+    }
 
     if (!establecimientoId.trim()) {
       setNotice({ type: 'error', text: 'Debe seleccionar o configurar un establecimiento válido.' })
@@ -381,7 +468,7 @@ export function CaiRegistroForm({
                       ? 'No hay indicadores para este grupo'
                       : 'Seleccione un indicador'}
               </option>
-              {indicadores.map((indicador) => (
+              {indicadores.filter((indicador) => indicador.grupo_id === grupoId).map((indicador) => (
                 <option key={indicador.id} value={indicador.id}>
                   {indicador.numero_indicador}. {indicador.descripcion}
                 </option>
@@ -413,7 +500,7 @@ export function CaiRegistroForm({
         </section>
       )}
 
-      {!isProductivity && (
+      {!isProductivity && !isCalculatedDropout && (
       <section aria-labelledby="config-heading" className="space-y-5">
         <div>
           <h2 id="config-heading" className="text-lg font-semibold text-slate-900">
@@ -457,6 +544,71 @@ export function CaiRegistroForm({
       </section>
       )}
 
+      {isCalculatedDropout ? (
+        <section aria-labelledby="mensual-heading" className="space-y-5">
+          <div>
+            <h2 id="mensual-heading" className="text-lg font-semibold text-slate-900">
+              {isSrpDropout
+                ? `Índice de Deserción SRP · ${gestion}`
+                : `Índice de Deserción 3ra Pentavalente · ${gestion}`}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {isSrpDropout
+                ? 'Resultado automático con dosis acumuladas de los indicadores 12 y 13 hasta el mes seleccionado.'
+                : 'Resultado automático con dosis acumuladas de los indicadores 57 y 3ra dosis pentavalente hasta el mes seleccionado.'}
+            </p>
+          </div>
+          <label className="block max-w-md text-sm font-medium text-slate-700">
+            Mes de corte
+            <select
+              className={inputClassName}
+              value={mes}
+              onChange={(event) => handleMesChange(event.target.value)}
+              disabled={!indicadorId}
+              required
+            >
+              <option value="">Seleccione un mes</option>
+              {MESES.map((nombre, index) => (
+                <option key={nombre} value={index + 1}>
+                  {nombre}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div
+            className={`rounded-xl border px-4 py-4 ${
+              dropoutRate === null
+                ? 'border-slate-200 bg-slate-50 text-slate-800'
+                : dropoutRate < 0 || dropoutRate >= 5
+                  ? 'border-rose-200 bg-rose-50 text-rose-900'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+            }`}
+            aria-live="polite"
+          >
+            {isLoadingDesercion ? (
+              <p className="text-sm">
+                {isSrpDropout
+                  ? 'Calculando con los registros de los indicadores 12 y 13…'
+                  : 'Calculando con los registros del indicador 57 y de la 3ra dosis pentavalente…'}
+              </p>
+            ) : (
+              <>
+                <p className="text-lg font-bold">
+                  {isSrpDropout ? 'Índice de Deserción SRP:' : 'Índice de Deserción 3ra Pentavalente:'}{' '}
+                  {dropoutRate === null ? 'No evaluable (sin primeras dosis)' : `${dropoutRate.toFixed(2)}%`}
+                </p>
+                <p className="mt-2 text-sm">
+                  1ras dosis: {dosisPrimera === null ? '—' : dosisPrimera} · {isSrpDropout ? '2das dosis' : '3ras dosis'}:{' '}
+                  {dosisSegunda === null ? '—' : dosisSegunda}
+                </p>
+                <p className="mt-1 text-xs">
+                  Meta: menor al 5%. El cálculo usa ((1ras dosis − dosis finales) ÷ 1ras dosis) × 100.
+                </p>
+              </>
+            )}
+          </div>
+        </section>
+      ) : (
       <section aria-labelledby="mensual-heading" className="space-y-5">
         <div>
           <h2 id="mensual-heading" className="text-lg font-semibold text-slate-900">
@@ -538,7 +690,9 @@ export function CaiRegistroForm({
         )}
         {isLoadingRegistro && <p className="text-xs text-slate-500">Consultando registro mensual…</p>}
       </section>
+      )}
 
+      {!isCalculatedDropout && (
       <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-6 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-xs text-slate-500">Establecimiento · {establecimientoId}</p>
         <button
@@ -549,6 +703,7 @@ export function CaiRegistroForm({
           {isSaving ? 'Guardando…' : 'Guardar Registro Mensual'}
         </button>
       </div>
+      )}
     </form>
   )
 }

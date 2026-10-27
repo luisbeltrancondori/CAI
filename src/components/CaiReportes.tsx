@@ -13,6 +13,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   LabelList,
   Legend,
   ReferenceLine,
@@ -24,7 +25,14 @@ import {
 } from 'recharts'
 import { getSupabaseClient } from '../lib/supabaseClient'
 import type { Database } from '../lib/database.types'
-import { getProductivityLevel, isMonthlyProductivityIndicator } from '../lib/indicatorMetrics'
+import {
+  calculateDropoutRate,
+  getDropoutSourceIndicators,
+  getProductivityLevel,
+  isCalculatedDropoutIndicator,
+  isMonthlyProductivityIndicator,
+  isSrpDropoutIndicator,
+} from '../lib/indicatorMetrics'
 
 type Establecimiento = Pick<Database['public']['Tables']['cai_establecimientos']['Row'], 'id' | 'nombre'>
 type Grupo = Pick<Database['public']['Tables']['cai_grupos']['Row'], 'id' | 'nombre' | 'orden'>
@@ -61,11 +69,23 @@ type ReporteEstablecimiento = {
   avanceMeta: number | null
   brechaMeta: number | null
   tasaProductividad: number | null
+  tasaDesercion: number | null
 }
 
 type EstadoSemaforo = {
-  label: 'COLOR ROJO' | 'COLOR AMARILLO' | 'COLOR VERDE' | 'SIN META' | 'BAJO' | 'REGULAR' | 'BUENO' | 'MUY BUENO'
-  shortLabel: 'Rojo' | 'Amarillo' | 'Verde' | 'Sin meta' | 'Bajo' | 'Regular' | 'Bueno' | 'Muy bueno'
+  label:
+    | 'COLOR ROJO'
+    | 'COLOR AMARILLO'
+    | 'COLOR VERDE'
+    | 'SIN META'
+    | 'BAJO'
+    | 'REGULAR'
+    | 'BUENO'
+    | 'MUY BUENO'
+    | 'SIN DATOS'
+    | 'ADECUADO'
+    | 'SOBRE EL LÍMITE'
+  shortLabel: 'Rojo' | 'Amarillo' | 'Verde' | 'Sin meta' | 'Bajo' | 'Regular' | 'Bueno' | 'Muy bueno' | 'Sin datos' | 'Adecuado' | 'Sobre el límite'
   dotClass: string
   badgeClass: string
 }
@@ -194,6 +214,16 @@ function getProductivitySemaforo(rate: number | null): EstadoSemaforo {
   return { label: 'SIN META', shortLabel: 'Sin meta', dotClass: 'bg-slate-400', badgeClass: 'bg-slate-100 text-slate-700' }
 }
 
+function getDropoutSemaforo(rate: number | null): EstadoSemaforo {
+  if (rate === null || !Number.isFinite(rate)) {
+    return { label: 'SIN DATOS', shortLabel: 'Sin datos', dotClass: 'bg-slate-400', badgeClass: 'bg-slate-100 text-slate-700' }
+  }
+  if (rate >= 0 && rate < 5) {
+    return { label: 'ADECUADO', shortLabel: 'Adecuado', dotClass: 'bg-emerald-600', badgeClass: 'bg-emerald-100 text-emerald-800' }
+  }
+  return { label: 'SOBRE EL LÍMITE', shortLabel: 'Sobre el límite', dotClass: 'bg-red-500', badgeClass: 'bg-red-100 text-red-800' }
+}
+
 function escapeCsv(value: string | number): string {
   const text = String(value)
   return `"${text.replaceAll('"', '""')}"`
@@ -223,19 +253,29 @@ function CoverageTooltip({
   incrementalLabel,
   firstSemesterLabel,
   isProductivity,
+  isDropout,
+  dropoutName,
 }: TooltipProps<number, string> & {
   incrementalLabel: string
   firstSemesterLabel: string
   isProductivity: boolean
+  isDropout: boolean
+  dropoutName: string
 }) {
   const row = payload?.map((item) => item.payload).find(isReporteEstablecimiento)
   if (!active || !row) return null
 
-  const values = [
-    { label: firstSemesterLabel, value: row.porcentajeJunio, color: '#2F6B3F' },
-    { label: incrementalLabel, value: row.porcentajeIncremento, color: '#D32E3A' },
-    { label: isProductivity ? 'Tasa actividades/consultas' : 'Cobertura Total Acumulada', value: row.cobertura, color: '#334155' },
-  ]
+  const values = isDropout
+    ? [
+        { label: '1ras dosis acumuladas', value: row.poblacion, color: '#2F6B3F', percentage: false },
+        { label: 'Dosis finales acumuladas', value: row.atendidos, color: '#D32E3A', percentage: false },
+        { label: dropoutName, value: row.tasaDesercion, color: '#334155', percentage: true },
+      ]
+    : [
+        { label: firstSemesterLabel, value: row.porcentajeJunio, color: '#2F6B3F', percentage: isProductivity },
+        { label: incrementalLabel, value: row.porcentajeIncremento, color: '#D32E3A', percentage: isProductivity },
+        { label: isProductivity ? 'Tasa actividades/consultas' : 'Cobertura Total Acumulada', value: row.cobertura, color: '#334155', percentage: isProductivity },
+      ]
 
   return (
     <div className="min-w-56 rounded-xl border border-slate-200 bg-white p-4 shadow-xl">
@@ -248,11 +288,17 @@ function CoverageTooltip({
               {item.label}
             </dt>
             <dd className="font-semibold text-slate-900">
-              {isProductivity ? formatProductivityRate(item.value) : formatPercentage(item.value)}
+              {item.value === null
+                ? '—'
+                : item.percentage
+                  ? formatPercentage(item.value)
+                  : isProductivity
+                    ? formatProductivityRate(item.value)
+                    : formatPercentage(item.value)}
             </dd>
           </div>
         ))}
-        {!isProductivity && (
+        {!isProductivity && !isDropout && (
           <div className="flex items-center justify-between gap-4 border-t border-slate-100 pt-2 text-xs">
             <dt className="text-slate-600">Brecha restante para la meta</dt>
             <dd className="font-semibold text-rose-700">
@@ -386,7 +432,6 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
         let query = getSupabaseClient()
           .from('cai_indicadores')
           .select('id, grupo_id, numero_indicador, descripcion, numerador_explicacion, denominador_explicacion')
-        if (grupoId) query = query.eq('grupo_id', grupoId)
         const { data, error: queryError } = await query
         if (queryError) throw queryError
         if (active) {
@@ -427,10 +472,15 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
       }
     }
 
-    const indicadorIds = indicadores.some(
+    const selectedIndicatorForFetch = indicadores.find(
       (indicador) => indicador.id === indicadorId && indicador.grupo_id === grupoId,
     )
-      ? [indicadorId]
+    const dropoutSources = selectedIndicatorForFetch && isCalculatedDropoutIndicator(selectedIndicatorForFetch)
+      ? Object.values(getDropoutSourceIndicators(selectedIndicatorForFetch, indicadores))
+          .filter((indicator): indicator is Indicador => Boolean(indicator))
+      : []
+    const indicadorIds = selectedIndicatorForFetch
+      ? [selectedIndicatorForFetch.id, ...dropoutSources.map((indicator) => indicator.id)]
       : []
 
     if (indicadorIds.length === 0) {
@@ -451,7 +501,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
               .from('cai_config_establecimiento')
               .select('establecimiento_id, indicador_id, compromiso_gestion, poblacion_programada')
               .eq('gestion', gestion)
-              .in('indicador_id', indicadorIds)
+              .eq('indicador_id', indicadorId)
             if (establecimientoId) query = query.eq('establecimiento_id', establecimientoId)
             return await query.range(from, to)
           })
@@ -499,6 +549,24 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
     Boolean(grupoId) && selectedIndicator?.grupo_id === grupoId
   const isProductivityIndicator =
     hasRequiredSelection && isMonthlyProductivityIndicator(selectedIndicator, grupos)
+  const isDropoutIndicator =
+    hasRequiredSelection && isCalculatedDropoutIndicator(selectedIndicator)
+  const isSrpDropout =
+    isDropoutIndicator && isSrpDropoutIndicator(selectedIndicator)
+  const dropoutName = isSrpDropout ? 'Deserción SRP' : 'Deserción 3ra Pentavalente'
+  const dropoutSourceIndicators = isDropoutIndicator && selectedIndicator
+    ? Object.values(getDropoutSourceIndicators(selectedIndicator, indicadores))
+        .filter((indicator): indicator is Indicador => Boolean(indicator))
+    : []
+  const hasDropoutSources =
+    dropoutSourceIndicators.length === 2
+  const dropoutFirstDoseIndicator = dropoutSourceIndicators.find(
+    (indicator) =>
+      Number(indicator.numero_indicador) === (isSrpDropout ? 12 : 57),
+  )
+  const dropoutFinalDoseIndicator = isDropoutIndicator && selectedIndicator
+    ? getDropoutSourceIndicators(selectedIndicator, indicadores).finalDose
+    : undefined
 
   const reporte = useMemo(() => {
     if (!hasRequiredSelection || !selectedIndicator) {
@@ -512,10 +580,12 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
         metaInstitucional: null,
         cumplimientoMetaInstitucional: null,
         tasaProductividadInstitucional: null,
+        tasaDesercionInstitucional: null,
       }
     }
 
     const productivityMode = isProductivityIndicator
+    const dropoutMode = isDropoutIndicator
     const establecimientosFiltrados = establecimientoId
       ? establecimientos.filter((establecimiento) => establecimiento.id === establecimientoId)
       : establecimientos
@@ -523,6 +593,53 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
     const rows = establecimientosFiltrados.map((establecimiento): ReporteEstablecimiento => {
       const configRows = configuraciones.filter((item) => item.establecimiento_id === establecimiento.id)
       const registroRows = registros.filter((item) => item.establecimiento_id === establecimiento.id)
+      if (dropoutMode) {
+        const sourceRows = registroRows.filter((item) => item.mes <= mes)
+        const totalFirstDoses = dropoutFirstDoseIndicator
+          ? sourceRows
+              .filter((item) => item.indicador_id === dropoutFirstDoseIndicator.id)
+              .reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
+          : 0
+        const totalSecondDoses = dropoutFinalDoseIndicator
+          ? sourceRows
+              .filter((item) => item.indicador_id === dropoutFinalDoseIndicator.id)
+              .reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
+          : 0
+        const firstDosesAtJune = dropoutFirstDoseIndicator
+          ? sourceRows
+              .filter((item) => item.indicador_id === dropoutFirstDoseIndicator.id && item.mes <= 6)
+              .reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
+          : 0
+        const secondDosesAtJune = dropoutFinalDoseIndicator
+          ? sourceRows
+              .filter((item) => item.indicador_id === dropoutFinalDoseIndicator.id && item.mes <= 6)
+              .reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
+          : 0
+        const tasaDesercion = dropoutFirstDoseIndicator && dropoutFinalDoseIndicator
+          ? calculateDropoutRate(totalFirstDoses, totalSecondDoses)
+          : null
+        const tasaDesercionJunio = dropoutFirstDoseIndicator && dropoutFinalDoseIndicator
+          ? calculateDropoutRate(firstDosesAtJune, secondDosesAtJune)
+          : null
+
+        return {
+          id: establecimiento.id,
+          nombre: establecimiento.nombre,
+          poblacion: totalFirstDoses,
+          atendidos: totalSecondDoses,
+          primerSemestre: firstDosesAtJune,
+          incrementoSegundoSemestre: Math.max(totalFirstDoses - firstDosesAtJune, 0),
+          incrementoAtendidos: totalSecondDoses,
+          porcentajeJunio: tasaDesercionJunio ?? 0,
+          porcentajeIncremento: tasaDesercion ?? 0,
+          cobertura: tasaDesercion ?? 0,
+          meta: 5,
+          avanceMeta: null,
+          brechaMeta: null,
+          tasaProductividad: null,
+          tasaDesercion,
+        }
+      }
       if (productivityMode) {
         const registroHastaMes = registroRows.filter((item) => item.mes <= mes)
         const registroPrimerSemestre = registroRows.filter((item) => item.mes <= 6)
@@ -560,6 +677,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           avanceMeta: null,
           brechaMeta: null,
           tasaProductividad,
+          tasaDesercion: null,
         }
       }
       const poblacion = configRows.reduce((total, item) => total + Number(item.poblacion_programada || 0), 0)
@@ -596,8 +714,52 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
         avanceMeta: meta !== null && meta > 0 ? (cobertura / meta) * 100 : null,
         brechaMeta: meta === null ? null : Math.max(meta - cobertura, 0),
         tasaProductividad: null,
+        tasaDesercion: null,
       }
     })
+
+    if (dropoutMode) {
+      const sourceRows = registros.filter((item) => item.mes <= mes)
+      const totalFirstDoses = dropoutFirstDoseIndicator
+        ? sourceRows
+            .filter((item) => item.indicador_id === dropoutFirstDoseIndicator.id)
+            .reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
+        : 0
+      const totalSecondDoses = dropoutFinalDoseIndicator
+        ? sourceRows
+            .filter((item) => item.indicador_id === dropoutFinalDoseIndicator.id)
+            .reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
+        : 0
+      const sourceRowsAtJune = registros.filter((item) => item.mes <= Math.min(mes, 6))
+      const firstDosesAtJune = dropoutFirstDoseIndicator
+        ? sourceRowsAtJune
+            .filter((item) => item.indicador_id === dropoutFirstDoseIndicator.id)
+            .reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
+        : 0
+      const secondDosesAtJune = dropoutFinalDoseIndicator
+        ? sourceRowsAtJune
+            .filter((item) => item.indicador_id === dropoutFinalDoseIndicator.id)
+            .reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
+        : 0
+      const tasaDesercion = dropoutFirstDoseIndicator && dropoutFinalDoseIndicator
+        ? calculateDropoutRate(totalFirstDoses, totalSecondDoses)
+        : null
+      const tasaDesercionJunio = dropoutFirstDoseIndicator && dropoutFinalDoseIndicator
+        ? calculateDropoutRate(firstDosesAtJune, secondDosesAtJune)
+        : null
+      return {
+        rows,
+        poblacionTotal: totalFirstDoses,
+        atendidosTotal: totalSecondDoses,
+        coberturaPromedio: tasaDesercion ?? 0,
+        porcentajePrimerPeriodo: tasaDesercionJunio ?? 0,
+        porcentajeIncremento: tasaDesercion ?? 0,
+        metaInstitucional: 5,
+        cumplimientoMetaInstitucional: null,
+        tasaProductividadInstitucional: null,
+        tasaDesercionInstitucional: tasaDesercion,
+      }
+    }
 
     if (productivityMode) {
       const registrosHastaMes = registros.filter((item) => item.mes <= mes)
@@ -629,6 +791,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
         cumplimientoMetaInstitucional: null,
         tasaProductividadInstitucional:
           totalConsultas > 0 ? totalActividades / totalConsultas : null,
+        tasaDesercionInstitucional: null,
       }
     }
 
@@ -667,6 +830,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           ? (atendidosTotal / metaTotalPonderada) * 10000
           : null,
       tasaProductividadInstitucional: null,
+      tasaDesercionInstitucional: null,
     }
   }, [
     establecimientoId,
@@ -677,10 +841,22 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
     selectedIndicator,
     hasRequiredSelection,
     isProductivityIndicator,
+    isDropoutIndicator,
+    hasDropoutSources,
+    dropoutFirstDoseIndicator,
+    dropoutFinalDoseIndicator,
+    indicadores,
   ])
 
   const coverageYAxisMax = useMemo(() => {
     if (!hasRequiredSelection || isProductivityIndicator) return 100
+    if (isDropoutIndicator) {
+      const highestRate = reporte.rows.reduce(
+        (highest, row) => Math.max(highest, row.tasaDesercion ?? 0),
+        0,
+      )
+      return Math.max(10, Math.ceil(highestRate / 5) * 5)
+    }
 
     const highestCoverage = reporte.rows.reduce(
       (highest, row) => Math.max(highest, row.cobertura),
@@ -688,13 +864,28 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
     )
     const highestValue = Math.max(highestCoverage, reporte.metaInstitucional ?? 0)
     return highestValue > 0 ? Math.ceil(highestValue / 10) * 10 : 100
-  }, [hasRequiredSelection, isProductivityIndicator, reporte.rows, reporte.metaInstitucional])
+  }, [hasRequiredSelection, isProductivityIndicator, isDropoutIndicator, reporte.rows, reporte.metaInstitucional])
+
+  const dropoutYAxisMin = useMemo(() => {
+    if (!isDropoutIndicator) return 0
+    const lowestRate = reporte.rows.reduce(
+      (lowest, row) => Math.min(lowest, row.tasaDesercion ?? 0),
+      0,
+    )
+    return Math.min(-20, lowestRate < 0 ? Math.floor(lowestRate / 5) * 5 : 0)
+  }, [isDropoutIndicator, reporte.rows])
 
   const datosMensualesModal = useMemo(() => {
     if (!establecimientoModal) return []
 
     let atendidosAcumulados = 0
     const productivityMode = isProductivityIndicator
+    const dropoutMode = isDropoutIndicator
+    const { firstDose: firstDoseIndicator, finalDose: finalDoseIndicator } = dropoutMode
+      ? getDropoutSourceIndicators(selectedIndicator, indicadores)
+      : { firstDose: undefined, finalDose: undefined }
+    let firstDosesAccumulated = 0
+    let secondDosesAccumulated = 0
     return MESES.slice(0, mes).map((nombre, index) => {
       const monthRecords = registros.filter(
         (registro) =>
@@ -705,6 +896,20 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
         (total, registro) => total + Number(registro.valor_numerador || 0),
         0,
       )
+      if (dropoutMode) {
+        firstDosesAccumulated += monthRecords
+          .filter((record) => record.indicador_id === firstDoseIndicator?.id)
+          .reduce((total, record) => total + Number(record.valor_numerador || 0), 0)
+        secondDosesAccumulated += monthRecords
+          .filter((record) => record.indicador_id === finalDoseIndicator?.id)
+          .reduce((total, record) => total + Number(record.valor_numerador || 0), 0)
+        return {
+          mes: nombre.slice(0, 3),
+          atendidos: firstDoseIndicator && finalDoseIndicator
+            ? calculateDropoutRate(firstDosesAccumulated, secondDosesAccumulated)
+            : null,
+        }
+      }
       if (productivityMode) {
         const monthConsultations = monthRecords.reduce(
           (total, registro) => total + Number(registro.valor_denominador || 0),
@@ -722,7 +927,17 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
         atendidos: atendidosAcumulados,
       }
     })
-  }, [establecimientoModal, registros, mes, isProductivityIndicator])
+  }, [establecimientoModal, registros, mes, isProductivityIndicator, isDropoutIndicator, indicadores, selectedIndicator])
+  const maxDesercionMensual = Math.max(
+    10,
+    Math.ceil(datosMensualesModal.reduce((max, item) => Math.max(max, item.atendidos ?? 0), 0) / 5) * 5,
+  )
+  const minDesercionMensual = Math.min(
+    -20,
+    Math.floor(
+      datosMensualesModal.reduce((min, item) => Math.min(min, item.atendidos ?? 0), 0) / 5,
+    ) * 5,
+  )
 
   useEffect(() => {
     if (!establecimientoModal) return
@@ -740,7 +955,16 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
 
   function exportToExcel() {
     const nombreMes = MESES[mes - 1]
-    const header = [
+    const header = isDropoutIndicator
+      ? [
+          'Centro de Salud',
+          `1ras dosis ${isSrpDropout ? 'SRP' : 'pentavalente'} acumuladas a ${nombreMes}`,
+          `${isSrpDropout ? '2das' : '3ras'} dosis ${isSrpDropout ? 'SRP' : 'pentavalente'} acumuladas a ${nombreMes}`,
+          `Índice de ${dropoutName} (%)`,
+          'Meta (<5%)',
+          'Estado',
+        ]
+      : [
       'Centro de Salud',
       isProductivityIndicator ? 'Consultas Nuevas y Repetidas' : 'Población Programada',
       isProductivityIndicator ? 'Actividades hasta Junio' : 'Atendidos a Junio',
@@ -756,22 +980,33 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
       isProductivityIndicator ? 'Rango normativo' : 'Compromiso Gestión (Meta)',
       'Estado / Semáforo',
     ]
-    const csvRows = reporte.rows.map((row) => [
-      row.nombre,
-      row.poblacion,
-      row.primerSemestre,
-      row.porcentajeJunio.toFixed(2),
-      row.atendidos,
-      row.cobertura.toFixed(2),
-      row.incrementoAtendidos,
-      isProductivityIndicator
-        ? row.porcentajeIncremento.toFixed(2)
-        : (row.cobertura - row.porcentajeJunio).toFixed(2),
-      isProductivityIndicator ? '0.00–0.25 Bajo; 0.26–0.59 Regular; 0.60–0.75 Bueno; 0.76–1.00 Muy bueno' : row.meta?.toFixed(2) ?? '',
-      (isProductivityIndicator
-        ? getProductivitySemaforo(row.tasaProductividad)
-        : getEstadoSemaforo(row.avanceMeta)).shortLabel,
-    ])
+    const csvRows = reporte.rows.map((row) =>
+      isDropoutIndicator
+        ? [
+            row.nombre,
+            row.poblacion,
+            row.atendidos,
+            row.tasaDesercion?.toFixed(2) ?? '',
+            '<5%',
+            getDropoutSemaforo(row.tasaDesercion).shortLabel,
+          ]
+        : [
+            row.nombre,
+            row.poblacion,
+            row.primerSemestre,
+            row.porcentajeJunio.toFixed(2),
+            row.atendidos,
+            row.cobertura.toFixed(2),
+            row.incrementoAtendidos,
+            isProductivityIndicator
+              ? row.porcentajeIncremento.toFixed(2)
+              : (row.cobertura - row.porcentajeJunio).toFixed(2),
+            isProductivityIndicator ? '0.00–0.25 Bajo; 0.26–0.59 Regular; 0.60–0.75 Bueno; 0.76–1.00 Muy bueno' : row.meta?.toFixed(2) ?? '',
+            (isProductivityIndicator
+              ? getProductivitySemaforo(row.tasaProductividad)
+              : getEstadoSemaforo(row.avanceMeta)).shortLabel,
+          ],
+    )
     const csv = [header, ...csvRows].map((row) => row.map(escapeCsv).join(';')).join('\r\n')
     const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
@@ -784,23 +1019,33 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
-  const firstSemesterLabel = isProductivityIndicator
-    ? 'Tasa hasta Junio'
-    : mes < 6
-      ? `Logro Ene–${MESES[mes - 1]}`
-      : 'Logro a Junio'
-  const incrementalLabel = isProductivityIndicator
-    ? `Tasa Julio–${MESES[mes - 1]}`
-    : `Incremento Jul–${MESES[mes - 1]}`
-  const firstSemesterChartLabel =
-    isProductivityIndicator
+  const firstSemesterLabel = isDropoutIndicator
+    ? mes < 6
+      ? `${isSrpDropout ? 'Deserción SRP' : 'Deserción pentavalente'} a ${MESES[mes - 1]}`
+      : `${isSrpDropout ? 'Deserción SRP' : 'Deserción pentavalente'} acumulada a junio`
+    : isProductivityIndicator
       ? 'Tasa hasta Junio'
       : mes < 6
-        ? `Logrado Ene–${MESES[mes - 1]}`
-        : '% Logrado a Junio'
-  const semaforoInstitucional = isProductivityIndicator
-    ? getProductivitySemaforo(reporte.tasaProductividadInstitucional)
-    : getEstadoSemaforo(reporte.cumplimientoMetaInstitucional)
+      ? `Logro Ene–${MESES[mes - 1]}`
+      : 'Logro a Junio'
+  const incrementalLabel = isDropoutIndicator
+    ? `${isSrpDropout ? 'Deserción SRP' : 'Deserción pentavalente'} acumulada a ${MESES[mes - 1]}`
+    : isProductivityIndicator
+      ? `Tasa Julio–${MESES[mes - 1]}`
+      : `Incremento Jul–${MESES[mes - 1]}`
+  const firstSemesterChartLabel =
+    isDropoutIndicator
+      ? isSrpDropout ? 'Índice de Deserción SRP' : 'Índice de Deserción 3ra Pentavalente'
+      : isProductivityIndicator
+        ? 'Tasa hasta Junio'
+        : mes < 6
+          ? `Logrado Ene–${MESES[mes - 1]}`
+          : '% Logrado a Junio'
+  const semaforoInstitucional = isDropoutIndicator
+    ? getDropoutSemaforo(reporte.tasaDesercionInstitucional)
+    : isProductivityIndicator
+      ? getProductivitySemaforo(reporte.tasaProductividadInstitucional)
+      : getEstadoSemaforo(reporte.cumplimientoMetaInstitucional)
 
   return (
     <div className="space-y-6">
@@ -882,7 +1127,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
               <option value="">
                 {isLoadingIndicadores ? 'Cargando indicadores…' : 'Todos los indicadores'}
               </option>
-              {indicadores.map((indicador) => (
+              {indicadores.filter((indicador) => !grupoId || indicador.grupo_id === grupoId).map((indicador) => (
                 <option key={indicador.id} value={indicador.id}>
                   {indicador.numero_indicador}. {indicador.descripcion}
                 </option>
@@ -902,70 +1147,127 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           {error}
         </div>
       )}
+      {isDropoutIndicator && !hasDropoutSources && (
+        <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {isSrpDropout
+            ? 'No se encontraron los indicadores 12 y 13 en el catálogo; el índice no puede calcularse.'
+            : 'No se encontró el indicador 57 o el indicador de 3ra dosis pentavalente; el índice no puede calcularse.'}
+        </div>
+      )}
 
       {selectedIndicator && (
       <section aria-label="Indicadores clave" className="grid w-full grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5">
         <MetricCard
           icon={Users}
-          label={isProductivityIndicator ? 'Consultas Nuevas y Repetidas' : 'Población Total Programada'}
+          label={
+            isDropoutIndicator
+              ? isSrpDropout ? '1ras dosis SRP acumuladas' : '1ras dosis pentavalente acumuladas'
+              : isProductivityIndicator
+                ? 'Consultas Nuevas y Repetidas'
+                : 'Población Total Programada'
+          }
           value={formatNumber(reporte.poblacionTotal)}
           detail={
-            isProductivityIndicator
-              ? `${gestion} · denominador acumulado hasta ${MESES[mes - 1]}`
-              : `${gestion} · población acumulada del filtro`
+            isDropoutIndicator
+              ? `${gestion} · indicador ${isSrpDropout ? '12' : '57'} hasta ${MESES[mes - 1]}`
+              : isProductivityIndicator
+                ? `${gestion} · denominador acumulado hasta ${MESES[mes - 1]}`
+                : `${gestion} · población acumulada del filtro`
           }
           accent="bg-sky-50"
         />
         <MetricCard
           icon={CircleCheck}
-          label={isProductivityIndicator ? 'Actividades clínicas realizadas' : 'Atendidos / Alcanzados'}
+          label={
+            isDropoutIndicator
+              ? isSrpDropout ? '2das dosis SRP acumuladas' : '3ras dosis pentavalente acumuladas'
+              : isProductivityIndicator
+                ? 'Actividades clínicas realizadas'
+                : 'Atendidos / Alcanzados'
+          }
           value={formatNumber(reporte.atendidosTotal)}
-          detail={`Acumulado hasta ${MESES[mes - 1]}`}
+          detail={
+            isDropoutIndicator
+              ? `${isSrpDropout ? 'Indicador 13' : '3ra dosis pentavalente'} · acumulado hasta ${MESES[mes - 1]}`
+              : `Acumulado hasta ${MESES[mes - 1]}`
+          }
           accent="bg-emerald-50 text-emerald-700"
         />
         <MetricCard
           icon={Activity}
-          label={isProductivityIndicator ? 'Tasa actividades / consultas' : '% Cobertura Promedio Red'}
-          value={isProductivityIndicator
-            ? formatProductivityRate(reporte.coberturaPromedio)
-            : formatPercentage(reporte.coberturaPromedio)}
+          label={
+            isDropoutIndicator
+              ? isSrpDropout ? 'Índice de Deserción SRP' : 'Índice de Deserción 3ra Pentavalente'
+              : isProductivityIndicator
+                ? 'Tasa actividades / consultas'
+                : '% Cobertura Promedio Red'
+          }
+          value={isDropoutIndicator
+            ? formatPercentage(reporte.tasaDesercionInstitucional)
+            : isProductivityIndicator
+              ? formatProductivityRate(reporte.coberturaPromedio)
+              : formatPercentage(reporte.coberturaPromedio)}
           detail={
-            isProductivityIndicator
-              ? 'Actividades clínicas ÷ consultas'
-              : 'Alcanzados sobre población programada'
+            isDropoutIndicator
+              ? '((1ras dosis − dosis finales) ÷ 1ras dosis) × 100'
+              : isProductivityIndicator
+                ? 'Actividades clínicas ÷ consultas'
+                : 'Alcanzados sobre población programada'
           }
           accent="bg-violet-50 text-violet-700"
           breakdown={{
-            firstLabel: isProductivityIndicator
-              ? 'Tasa hasta Junio'
-              : mes < 6
+            firstLabel: isDropoutIndicator
+              ? mes < 6
+                ? `Deserción a ${MESES[mes - 1]}`
+                : 'Deserción a junio'
+              : isProductivityIndicator
+                ? 'Tasa hasta Junio'
+                : mes < 6
                 ? `Logrado Ene–${MESES[mes - 1]}`
                 : 'Logrado a Junio',
             firstValue: reporte.porcentajePrimerPeriodo,
-            incrementLabel: isProductivityIndicator
-              ? `Tasa Julio–${MESES[mes - 1]}`
-              : mes > 6
+            incrementLabel: isDropoutIndicator
+              ? `Deserción a ${MESES[mes - 1]}`
+              : isProductivityIndicator
+                ? `Tasa Julio–${MESES[mes - 1]}`
+                : mes > 6
                 ? `Inc. Jul–${MESES[mes - 1]}`
                 : 'Inc. Jul–Dic',
             incrementValue: reporte.porcentajeIncremento,
-            incrementPrefix: isProductivityIndicator ? '' : undefined,
+            incrementPrefix: isProductivityIndicator || isDropoutIndicator ? '' : undefined,
             formatAsRatio: isProductivityIndicator,
           }}
         />
         <MetricCard
           icon={Target}
-          label={isProductivityIndicator ? 'Rangos normativos' : 'Meta Institucional'}
-          value={isProductivityIndicator ? '0.00–1.00' : formatPercentage(reporte.metaInstitucional)}
+          label={
+            isDropoutIndicator
+              ? 'Umbral máximo'
+              : isProductivityIndicator
+                ? 'Rangos normativos'
+                : 'Meta Institucional'
+          }
+          value={isDropoutIndicator
+            ? '<5%'
+            : isProductivityIndicator
+              ? '0.00–1.00'
+              : formatPercentage(reporte.metaInstitucional)}
           detail={
-            isProductivityIndicator
-              ? 'Bajo ≤0.25 · Regular ≤0.59 · Bueno ≤0.75 · Muy bueno ≥0.76'
-              : 'Promedio ponderado por población'
+            isDropoutIndicator
+              ? 'El valor de 5% ya supera el límite'
+              : isProductivityIndicator
+                ? 'Bajo ≤0.25 · Regular ≤0.59 · Bueno ≤0.75 · Muy bueno ≥0.76'
+                : 'Promedio ponderado por población'
           }
           accent="bg-amber-50 text-amber-700"
         />
         <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            {isProductivityIndicator ? 'Calificación de Productividad' : 'Calificación de Cobertura'}
+            {isDropoutIndicator
+              ? `Evaluación de ${dropoutName}`
+              : isProductivityIndicator
+                ? 'Calificación de Productividad'
+                : 'Calificación de Cobertura'}
           </p>
           <div className="mt-3 flex items-center gap-3">
             <span
@@ -975,12 +1277,18 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
             <p className="text-lg font-bold leading-tight text-slate-900">{semaforoInstitucional.label}</p>
           </div>
           <p className="mt-2 text-xs text-slate-500">
-            {isProductivityIndicator ? 'Según tasa actividades / consultas (0–1)' : 'De la Meta Semestral/Institucional'}
+            {isDropoutIndicator
+              ? 'Meta: índice menor al 5%'
+              : isProductivityIndicator
+                ? 'Según tasa actividades / consultas (0–1)'
+                : 'De la Meta Semestral/Institucional'}
           </p>
           <p className="mt-1 text-xs font-medium text-slate-600">
-            {isProductivityIndicator
-              ? `Tasa: ${formatProductivityRate(reporte.tasaProductividadInstitucional)}`
-              : `Cumplimiento: ${formatPercentage(reporte.cumplimientoMetaInstitucional)}`}
+            {isDropoutIndicator
+              ? `Índice: ${formatPercentage(reporte.tasaDesercionInstitucional)}`
+              : isProductivityIndicator
+                ? `Tasa: ${formatProductivityRate(reporte.tasaProductividadInstitucional)}`
+                : `Cumplimiento: ${formatPercentage(reporte.cumplimientoMetaInstitucional)}`}
           </p>
         </article>
       </section>
@@ -990,14 +1298,22 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-lg font-bold text-slate-900">
-              {isProductivityIndicator
-                ? 'Tasa de productividad por centro de salud'
-                : 'Evolución y logro por centro de salud'}
+              {isDropoutIndicator
+                ? isSrpDropout
+                  ? 'Índice de Deserción SRP por centro de salud'
+                  : 'Índice de Deserción 3ra Pentavalente por centro de salud'
+                : isProductivityIndicator
+                  ? 'Tasa de productividad por centro de salud'
+                  : 'Evolución y logro por centro de salud'}
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              {isProductivityIndicator
-                ? `Tasa de actividades clínicas por consultas en los periodos seleccionados de ${gestion}.`
-                : `${firstSemesterLabel} e incremento julio–${MESES[mes - 1]} de ${gestion}.`}
+              {isDropoutIndicator
+                ? isSrpDropout
+                  ? `Dosis acumuladas de los indicadores 12 y 13 hasta ${MESES[mes - 1]} de ${gestion}; el límite es menor al 5%.`
+                  : `Dosis acumuladas del indicador 57 y de 3ra dosis pentavalente hasta ${MESES[mes - 1]} de ${gestion}; el límite es menor al 5%.`
+                : isProductivityIndicator
+                  ? `Tasa de actividades clínicas por consultas en los periodos seleccionados de ${gestion}.`
+                  : `${firstSemesterLabel} e incremento julio–${MESES[mes - 1]} de ${gestion}.`}
             </p>
           </div>
           {isLoadingDatos && <span className="text-xs font-medium text-cai-700">Actualizando datos…</span>}
@@ -1015,7 +1331,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={reporte.rows}
-                margin={{ top: 30, right: isProductivityIndicator ? 190 : 100, left: 4, bottom: 70 }}
+                margin={{ top: 30, right: isProductivityIndicator ? 190 : isDropoutIndicator ? 48 : 100, left: 4, bottom: 70 }}
                 barCategoryGap="28%"
               >
                 <CartesianGrid stroke="#e2e8f0" strokeDasharray="4 4" vertical={false} />
@@ -1034,12 +1350,25 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                   tick={{ fill: '#64748b', fontSize: 11 }}
                   axisLine={false}
                   tickLine={false}
-                  domain={isProductivityIndicator ? [0, 1] : [0, coverageYAxisMax]}
+                  domain={
+                    isProductivityIndicator
+                      ? [0, 1]
+                      : isDropoutIndicator
+                        ? [dropoutYAxisMin, coverageYAxisMax]
+                        : [0, coverageYAxisMax]
+                  }
                   ticks={isProductivityIndicator ? [0, 0.25, 0.5, 0.75, 1] : undefined}
                   tickFormatter={(value: number) =>
-                    isProductivityIndicator ? formatProductivityRate(value) : String(value)
+                    isProductivityIndicator
+                      ? formatProductivityRate(value)
+                      : isDropoutIndicator
+                        ? `${value}%`
+                        : String(value)
                   }
                 />
+                {isDropoutIndicator && (
+                  <ReferenceLine y={0} stroke="#475569" strokeWidth={1.5} isFront />
+                )}
                 {isProductivityIndicator && (
                   <>
                     <ReferenceLine
@@ -1122,6 +1451,8 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                       incrementalLabel={incrementalLabel}
                       firstSemesterLabel={firstSemesterLabel}
                       isProductivity={isProductivityIndicator}
+                      isDropout={isDropoutIndicator}
+                      dropoutName={dropoutName}
                     />
                   }
                   cursor={{ fill: '#f1f5f9', opacity: 0.65 }}
@@ -1138,7 +1469,9 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                     strokeDasharray="3 3"
                     strokeWidth={2}
                     label={{
-                      value: `Meta: ${formatPercentage(reporte.metaInstitucional)}`,
+                      value: isDropoutIndicator
+                        ? 'Límite: 5%'
+                        : `Meta: ${formatPercentage(reporte.metaInstitucional)}`,
                       fill: '#dc2626',
                       fontSize: 11,
                       position: 'right',
@@ -1146,6 +1479,39 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                     }}
                   />
                 )}
+                {isDropoutIndicator ? (
+                  <Bar
+                    name={`Índice de ${dropoutName}`}
+                    dataKey="tasaDesercion"
+                    fill="#16a34a"
+                    radius={[4, 4, 0, 0]}
+                    barSize={48}
+                    maxBarSize={48}
+                  >
+                    {reporte.rows.map((row) => (
+                      <Cell
+                        key={row.id}
+                        fill={
+                          row.tasaDesercion === null
+                            ? '#94a3b8'
+                            : row.tasaDesercion < 0 || row.tasaDesercion >= 5
+                              ? '#dc2626'
+                              : '#16a34a'
+                        }
+                      />
+                    ))}
+                    <LabelList
+                      dataKey="tasaDesercion"
+                      position="top"
+                      formatter={(value: number | null) => value === null ? '' : formatPercentage(value)}
+                      fill="#334155"
+                      fontSize={11}
+                      fontWeight={700}
+                      pointerEvents="none"
+                    />
+                  </Bar>
+                ) : (
+                <>
                 <Bar
                   name={firstSemesterChartLabel}
                   dataKey="porcentajeJunio"
@@ -1207,6 +1573,8 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                     />
                   )}
                 </Bar>
+                </>
+                )}
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -1218,50 +1586,60 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
         <div className="border-b border-slate-200 px-5 py-5 sm:px-6">
           <h2 className="text-lg font-bold text-slate-900">Detalle analítico por establecimiento</h2>
           <p className="mt-1 text-sm text-slate-500">
-            {isProductivityIndicator
-              ? `Tasa acumulada hasta ${MESES[mes - 1]} de ${gestion}.`
-              : `Cobertura acumulada hasta ${MESES[mes - 1]} de ${gestion}.`}
+            {isDropoutIndicator
+              ? `Índice calculado con dosis acumuladas hasta ${MESES[mes - 1]} de ${gestion}.`
+              : isProductivityIndicator
+                ? `Tasa acumulada hasta ${MESES[mes - 1]} de ${gestion}.`
+                : `Cobertura acumulada hasta ${MESES[mes - 1]} de ${gestion}.`}
           </p>
         </div>
         <div className="overflow-x-auto">
-          <table className="min-w-[1240px] divide-y divide-slate-200 text-sm">
+          <table className={`${isDropoutIndicator ? 'min-w-[900px]' : 'min-w-[1240px]'} divide-y divide-slate-200 text-sm`}>
             <thead className="bg-[#0d4859] text-left text-xs uppercase tracking-wide text-white">
               <tr>
                 <th scope="col" className="min-w-48 px-4 py-3 font-bold">Centro de Salud</th>
-                <th scope="col" className="min-w-32 px-4 py-3 text-right font-bold">
-                  {isProductivityIndicator ? 'Consultas (Nuevas y Repetidas)' : 'Población Programada'}
-                </th>
-                <th scope="col" className="min-w-32 bg-sky-900 px-4 py-3 text-right font-bold">
-                  {isProductivityIndicator
-                    ? 'Actividades hasta Junio'
-                    : 'Atendidos a Junio'}
-                </th>
-                <th scope="col" className="min-w-32 bg-sky-900 px-4 py-3 text-right font-bold">
-                  {isProductivityIndicator
-                    ? 'Tasa hasta Junio'
-                    : '% Logrado a Junio'}
-                </th>
-                <th scope="col" className="min-w-40 bg-emerald-900 px-4 py-3 text-right font-bold">
-                  {isProductivityIndicator
-                    ? `Actividades a ${MESES[mes - 1]}`
-                    : `Atendidos a ${MESES[mes - 1]} (Acum.)`}
-                </th>
-                <th scope="col" className="min-w-36 bg-emerald-900 px-4 py-3 text-right font-bold">
-                  {isProductivityIndicator ? `Tasa a ${MESES[mes - 1]}` : `% Logrado a ${MESES[mes - 1]}`}
-                </th>
-                <th scope="col" className="min-w-40 bg-emerald-900 px-4 py-3 text-right font-bold">
-                  {isProductivityIndicator
-                    ? `Actividades Julio-${MESES[mes - 1]}`
-                    : `Incremento Atendidos (Jul-${MESES[mes - 1]})`}
-                </th>
-                <th scope="col" className="min-w-40 bg-emerald-900 px-4 py-3 text-right font-bold">
-                  {isProductivityIndicator
-                    ? `Tasa Julio-${MESES[mes - 1]}`
-                    : 'Incremento % (Diferencia)'}
-                </th>
-                <th scope="col" className="min-w-40 bg-amber-900 px-4 py-3 text-right font-bold">
-                  {isProductivityIndicator ? 'Rango normativo' : 'Compromiso Gestión (Meta)'}
-                </th>
+                {isDropoutIndicator ? (
+                  <>
+                    <th scope="col" className="min-w-36 px-4 py-3 text-right font-bold">
+                      1ras dosis {isSrpDropout ? 'SRP' : 'pentavalente'}
+                    </th>
+                    <th scope="col" className="min-w-36 px-4 py-3 text-right font-bold">
+                      {isSrpDropout ? '2das' : '3ras'} dosis {isSrpDropout ? 'SRP' : 'pentavalente'}
+                    </th>
+                    <th scope="col" className="min-w-40 bg-sky-900 px-4 py-3 text-right font-bold">Deserción a junio</th>
+                    <th scope="col" className="min-w-40 bg-emerald-900 px-4 py-3 text-right font-bold">
+                      {dropoutName} a {MESES[mes - 1]}
+                    </th>
+                    <th scope="col" className="min-w-32 bg-amber-900 px-4 py-3 text-right font-bold">Meta (&lt;5%)</th>
+                  </>
+                ) : (
+                  <>
+                    <th scope="col" className="min-w-32 px-4 py-3 text-right font-bold">
+                      {isProductivityIndicator ? 'Consultas (Nuevas y Repetidas)' : 'Población Programada'}
+                    </th>
+                    <th scope="col" className="min-w-32 bg-sky-900 px-4 py-3 text-right font-bold">
+                      {isProductivityIndicator ? 'Actividades hasta Junio' : 'Atendidos a Junio'}
+                    </th>
+                    <th scope="col" className="min-w-32 bg-sky-900 px-4 py-3 text-right font-bold">
+                      {isProductivityIndicator ? 'Tasa hasta Junio' : '% Logrado a Junio'}
+                    </th>
+                    <th scope="col" className="min-w-40 bg-emerald-900 px-4 py-3 text-right font-bold">
+                      {isProductivityIndicator ? `Actividades a ${MESES[mes - 1]}` : `Atendidos a ${MESES[mes - 1]} (Acum.)`}
+                    </th>
+                    <th scope="col" className="min-w-36 bg-emerald-900 px-4 py-3 text-right font-bold">
+                      {isProductivityIndicator ? `Tasa a ${MESES[mes - 1]}` : `% Logrado a ${MESES[mes - 1]}`}
+                    </th>
+                    <th scope="col" className="min-w-40 bg-emerald-900 px-4 py-3 text-right font-bold">
+                      {isProductivityIndicator ? `Actividades Julio-${MESES[mes - 1]}` : `Incremento Atendidos (Jul-${MESES[mes - 1]})`}
+                    </th>
+                    <th scope="col" className="min-w-40 bg-emerald-900 px-4 py-3 text-right font-bold">
+                      {isProductivityIndicator ? `Tasa Julio-${MESES[mes - 1]}` : 'Incremento % (Diferencia)'}
+                    </th>
+                    <th scope="col" className="min-w-40 bg-amber-900 px-4 py-3 text-right font-bold">
+                      {isProductivityIndicator ? 'Rango normativo' : 'Compromiso Gestión (Meta)'}
+                    </th>
+                  </>
+                )}
                 <th scope="col" className="min-w-36 bg-[#0d4859] px-4 py-3 text-center font-bold">
                   Estado / Semáforo
                 </th>
@@ -1273,44 +1651,62 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
             <tbody className="divide-y divide-slate-100 bg-white">
               {reporte.rows.map((row) => {
                 const porcentajeDiferencia = row.cobertura - row.porcentajeJunio
-                const semaforo = isProductivityIndicator
-                  ? getProductivitySemaforo(row.tasaProductividad)
-                  : getEstadoSemaforo(row.avanceMeta)
+                const semaforo = isDropoutIndicator
+                  ? getDropoutSemaforo(row.tasaDesercion)
+                  : isProductivityIndicator
+                    ? getProductivitySemaforo(row.tasaProductividad)
+                    : getEstadoSemaforo(row.avanceMeta)
                 return (
                   <tr key={row.id} className="hover:bg-slate-50/80">
                     <th scope="row" className="whitespace-nowrap px-4 py-4 text-left font-semibold text-slate-800">
                       {row.nombre}
                     </th>
-                    <td className="whitespace-nowrap px-4 py-4 text-right text-slate-600">
-                      {formatNumber(row.poblacion)}
-                    </td>
-                    <td className="whitespace-nowrap bg-sky-50 px-4 py-4 text-right font-medium text-sky-950">
-                      {formatNumber(row.primerSemestre)}
-                    </td>
-                    <td className="whitespace-nowrap bg-sky-50 px-4 py-4 text-right font-semibold text-sky-950">
-                      {isProductivityIndicator
-                        ? formatProductivityRate(row.porcentajeJunio)
-                        : formatPercentage(row.porcentajeJunio)}
-                    </td>
-                    <td className="whitespace-nowrap bg-emerald-50 px-4 py-4 text-right font-medium text-emerald-950">
-                      {formatNumber(row.atendidos)}
-                    </td>
-                    <td className="whitespace-nowrap bg-emerald-50 px-4 py-4 text-right font-semibold text-emerald-950">
-                      {isProductivityIndicator
-                        ? formatProductivityRate(row.cobertura)
-                        : formatPercentage(row.cobertura)}
-                    </td>
-                    <td className="whitespace-nowrap bg-emerald-50 px-4 py-4 text-right text-emerald-950">
-                      {formatNumber(row.incrementoAtendidos)}
-                    </td>
-                    <td className="whitespace-nowrap bg-emerald-50 px-4 py-4 text-right font-medium text-emerald-950">
-                      {isProductivityIndicator
-                        ? formatProductivityRate(row.porcentajeIncremento)
-                        : formatPercentage(porcentajeDiferencia)}
-                    </td>
-                    <td className="whitespace-nowrap bg-amber-50 px-4 py-4 text-right font-semibold text-amber-950">
-                      {isProductivityIndicator ? '0.00–1.00' : formatPercentage(row.meta)}
-                    </td>
+                    {isDropoutIndicator ? (
+                      <>
+                        <td className="whitespace-nowrap px-4 py-4 text-right text-slate-600">{formatNumber(row.poblacion)}</td>
+                        <td className="whitespace-nowrap px-4 py-4 text-right text-slate-600">{formatNumber(row.atendidos)}</td>
+                        <td className="whitespace-nowrap bg-sky-50 px-4 py-4 text-right font-semibold text-sky-950">
+                          {formatPercentage(row.porcentajeJunio)}
+                        </td>
+                        <td className="whitespace-nowrap bg-emerald-50 px-4 py-4 text-right font-semibold text-emerald-950">
+                          {formatPercentage(row.tasaDesercion)}
+                        </td>
+                        <td className="whitespace-nowrap bg-amber-50 px-4 py-4 text-right font-semibold text-amber-950">&lt;5%</td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="whitespace-nowrap px-4 py-4 text-right text-slate-600">
+                          {formatNumber(row.poblacion)}
+                        </td>
+                        <td className="whitespace-nowrap bg-sky-50 px-4 py-4 text-right font-medium text-sky-950">
+                          {formatNumber(row.primerSemestre)}
+                        </td>
+                        <td className="whitespace-nowrap bg-sky-50 px-4 py-4 text-right font-semibold text-sky-950">
+                          {isProductivityIndicator
+                            ? formatProductivityRate(row.porcentajeJunio)
+                            : formatPercentage(row.porcentajeJunio)}
+                        </td>
+                        <td className="whitespace-nowrap bg-emerald-50 px-4 py-4 text-right font-medium text-emerald-950">
+                          {formatNumber(row.atendidos)}
+                        </td>
+                        <td className="whitespace-nowrap bg-emerald-50 px-4 py-4 text-right font-semibold text-emerald-950">
+                          {isProductivityIndicator
+                            ? formatProductivityRate(row.cobertura)
+                            : formatPercentage(row.cobertura)}
+                        </td>
+                        <td className="whitespace-nowrap bg-emerald-50 px-4 py-4 text-right text-emerald-950">
+                          {formatNumber(row.incrementoAtendidos)}
+                        </td>
+                        <td className="whitespace-nowrap bg-emerald-50 px-4 py-4 text-right font-medium text-emerald-950">
+                          {isProductivityIndicator
+                            ? formatProductivityRate(row.porcentajeIncremento)
+                            : formatPercentage(porcentajeDiferencia)}
+                        </td>
+                        <td className="whitespace-nowrap bg-amber-50 px-4 py-4 text-right font-semibold text-amber-950">
+                          {isProductivityIndicator ? '0.00–1.00' : formatPercentage(row.meta)}
+                        </td>
+                      </>
+                    )}
                     <td className="whitespace-nowrap px-4 py-4 text-center">
                       <span
                         className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-bold ${semaforo.badgeClass}`}
@@ -1334,7 +1730,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
               })}
               {reporte.rows.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="px-5 py-10 text-center text-sm text-slate-500">
+                  <td colSpan={isDropoutIndicator ? 8 : 11} className="px-5 py-10 text-center text-sm text-slate-500">
                     No hay datos para mostrar con los filtros seleccionados.
                   </td>
                 </tr>
@@ -1363,9 +1759,11 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                   {establecimientoModal.nombre}
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  {isProductivityIndicator
-                    ? `Tasa mensual de actividades/consultas hasta ${MESES[mes - 1]} de ${gestion}`
-                    : `Atenciones acumuladas hasta ${MESES[mes - 1]} de ${gestion}`}
+                  {isDropoutIndicator
+                  ? `Índice de ${dropoutName} acumulado hasta ${MESES[mes - 1]} de ${gestion}`
+                    : isProductivityIndicator
+                      ? `Tasa mensual de actividades/consultas hasta ${MESES[mes - 1]} de ${gestion}`
+                      : `Atenciones acumuladas hasta ${MESES[mes - 1]} de ${gestion}`}
                 </p>
               </div>
               <button
@@ -1389,10 +1787,20 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                     <XAxis dataKey="mes" tick={{ fill: '#475569', fontSize: 12 }} />
                     <YAxis
                       unit={undefined}
-                      allowDecimals={isProductivityIndicator}
-                      domain={isProductivityIndicator ? [0, 1] : undefined}
+                      allowDecimals={isProductivityIndicator || isDropoutIndicator}
+                      domain={
+                        isProductivityIndicator
+                          ? [0, 1]
+                          : isDropoutIndicator
+                            ? [minDesercionMensual, maxDesercionMensual]
+                            : undefined
+                      }
                       tickFormatter={(value: number) =>
-                        isProductivityIndicator ? formatProductivityRate(value) : formatNumber(value)
+                        isProductivityIndicator
+                          ? formatProductivityRate(value)
+                          : isDropoutIndicator
+                            ? `${value}%`
+                            : formatNumber(value)
                       }
                       tick={{ fill: '#64748b', fontSize: 12 }}
                       axisLine={false}
@@ -1400,19 +1808,51 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                     />
                     <Tooltip
                       formatter={(value) => [
-                        isProductivityIndicator
-                          ? formatProductivityRate(value === null ? null : Number(value))
-                          : formatNumber(Number(value)),
-                        isProductivityIndicator ? 'Tasa del mes' : 'Atendidos acumulados',
+                        isDropoutIndicator
+                          ? formatPercentage(value === null ? null : Number(value))
+                          : isProductivityIndicator
+                            ? formatProductivityRate(value === null ? null : Number(value))
+                            : formatNumber(Number(value)),
+                        isDropoutIndicator
+                          ? `${dropoutName} acumulada`
+                          : isProductivityIndicator
+                            ? 'Tasa del mes'
+                            : 'Atendidos acumulados',
                       ]}
                       labelFormatter={(label) => `Mes: ${label}`}
                     />
+                    {isDropoutIndicator && (
+                      <>
+                        <ReferenceLine y={0} stroke="#475569" strokeWidth={1.5} isFront />
+                        <ReferenceLine y={5} stroke="#dc2626" strokeDasharray="4 4" label="Límite 5%" />
+                      </>
+                    )}
                     <Bar
                       dataKey="atendidos"
-                      name={isProductivityIndicator ? 'Tasa mensual' : 'Atendidos acumulados'}
-                      fill="#10b981"
+                      name={
+                        isDropoutIndicator
+                          ? `Índice de ${dropoutName}`
+                          : isProductivityIndicator
+                            ? 'Tasa mensual'
+                            : 'Atendidos acumulados'
+                      }
+                      fill={isDropoutIndicator ? '#16a34a' : '#10b981'}
                       radius={[5, 5, 0, 0]}
-                    />
+                    >
+                      {isDropoutIndicator &&
+                        datosMensualesModal.map((item) => (
+                          <Cell
+                            key={item.mes}
+                            fill={
+                              typeof item.atendidos !== 'number'
+                                ? '#94a3b8'
+                                : item.atendidos < 0 || item.atendidos >= 5
+                                  ? '#dc2626'
+                                  : '#16a34a'
+                            }
+                          />
+                        ))}
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               )}
