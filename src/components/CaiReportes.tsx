@@ -1177,7 +1177,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           </label>
         </div>
         {hasRequiredSelection && selectedIndicator && (
-          <p className="mt-3 text-xs text-slate-500">
+          <p className="mt-4 text-center text-sm font-bold uppercase text-slate-700">
             Indicador filtrado: {selectedIndicator.numero_indicador}. {selectedIndicator.descripcion}
           </p>
         )}
@@ -1379,8 +1379,8 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                 <XAxis
                   dataKey="nombre"
                   interval={0}
-                  angle={-30}
-                  textAnchor="end"
+                  angle={0}
+                  textAnchor="middle"
                   height={85}
                   tick={{ fill: '#475569', fontSize: 11 }}
                   axisLine={{ stroke: '#cbd5e1' }}
