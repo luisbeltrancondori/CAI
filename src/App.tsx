@@ -30,6 +30,7 @@ const CaiReportes = lazy(() =>
 
 type SidebarProps = {
   activeView: ActiveView
+  isGuest: boolean
   onHome: () => void
   onOpenRegistration: () => void
   onOpenReports: () => void
@@ -74,6 +75,7 @@ function readStoredSession(): CaiSession | null {
 
 function Sidebar({
   activeView,
+  isGuest,
   onHome,
   onOpenRegistration,
   onOpenReports,
@@ -132,11 +134,11 @@ function Sidebar({
         {!isCollapsed ? (
           <>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-200">
-              Establecimiento activo
+              {isGuest ? 'Acceso de invitado' : 'Establecimiento activo'}
             </p>
             <p className="mt-2 text-sm font-bold leading-5 text-white">{session.establecimientoNombre}</p>
             <p className="mt-3 text-xs leading-5 text-teal-100">
-              Operador · {session.responsable}
+              {isGuest ? 'Modo de solo lectura' : `Operador · ${session.responsable}`}
               {session.telefono && <span className="block">Contacto · {session.telefono}</span>}
             </p>
             <button
@@ -145,7 +147,7 @@ function Sidebar({
               className="mt-4 flex w-full items-center gap-2 rounded-lg border border-white/30 px-3 py-2 text-left text-xs font-semibold text-white transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white"
             >
               <LogOut size={15} />
-              Cambiar Centro / Salir
+              {isGuest ? 'Salir del modo invitado' : 'Cambiar Centro / Salir'}
             </button>
           </>
         ) : (
@@ -157,34 +159,38 @@ function Sidebar({
 
       <nav aria-label="Navegación principal" className="flex-1 overflow-y-auto px-3 py-5">
         <div className="mb-5 space-y-1">
-          <button
-            type="button"
-            aria-current={activeView === 'inicio' ? 'page' : undefined}
-            onClick={onHome}
-            title={isCollapsed ? 'Inicio' : undefined}
-            className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-white ${
-              activeView === 'inicio'
-                ? 'bg-white font-semibold text-[#0d4859] shadow-sm'
-                : 'text-teal-50 hover:bg-white/10'
-            }`}
-          >
-            <Home size={19} aria-hidden="true" />
-            {!isCollapsed && <span>INICIO</span>}
-          </button>
-          <button
-            type="button"
-            aria-current={activeView === 'registro' ? 'page' : undefined}
-            onClick={onOpenRegistration}
-            title={isCollapsed ? 'Registro de datos' : undefined}
-            className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-white ${
-              activeView === 'registro'
-                ? 'bg-white font-semibold text-[#0d4859] shadow-sm'
-                : 'text-teal-50 hover:bg-white/10'
-            }`}
-          >
-            <ClipboardList size={19} aria-hidden="true" />
-            {!isCollapsed && <span>Registro de Datos</span>}
-          </button>
+          {!isGuest && (
+            <button
+              type="button"
+              aria-current={activeView === 'inicio' ? 'page' : undefined}
+              onClick={onHome}
+              title={isCollapsed ? 'Inicio' : undefined}
+              className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-white ${
+                activeView === 'inicio'
+                  ? 'bg-white font-semibold text-[#0d4859] shadow-sm'
+                  : 'text-teal-50 hover:bg-white/10'
+              }`}
+            >
+              <Home size={19} aria-hidden="true" />
+              {!isCollapsed && <span>INICIO</span>}
+            </button>
+          )}
+          {!isGuest && (
+            <button
+              type="button"
+              aria-current={activeView === 'registro' ? 'page' : undefined}
+              onClick={onOpenRegistration}
+              title={isCollapsed ? 'Registro de datos' : undefined}
+              className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-white ${
+                activeView === 'registro'
+                  ? 'bg-white font-semibold text-[#0d4859] shadow-sm'
+                  : 'text-teal-50 hover:bg-white/10'
+              }`}
+            >
+              <ClipboardList size={19} aria-hidden="true" />
+              {!isCollapsed && <span>Registro de Datos</span>}
+            </button>
+          )}
           <button
             type="button"
             aria-current={activeView === 'reportes' ? 'page' : undefined}
@@ -212,8 +218,8 @@ function Sidebar({
         <div className="border-t border-white/15 px-2 py-3">
           <button
             type="button"
-            aria-label="Cambiar Centro / Salir"
-            title="Cambiar Centro / Salir"
+            aria-label={isGuest ? 'Salir del modo invitado' : 'Cambiar Centro / Salir'}
+            title={isGuest ? 'Salir del modo invitado' : 'Cambiar Centro / Salir'}
             onClick={onLogout}
             className="w-full rounded-lg px-2 py-2 text-sm text-white transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white"
           >
@@ -267,6 +273,7 @@ function InstitutionalBanner() {
 
 export function App() {
   const [session, setSession] = useState<CaiSession | null>(readStoredSession)
+  const [isGuestSession, setIsGuestSession] = useState(false)
   const [adminEmail, setAdminEmail] = useState('')
   const [isCheckingAdminSession, setIsCheckingAdminSession] = useState(true)
   const [adminAuthError, setAdminAuthError] = useState('')
@@ -360,11 +367,27 @@ export function App() {
 
   function handleIdentified(nextSession: CaiSession) {
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(nextSession))
+    setIsGuestSession(false)
     setSession(nextSession)
+  }
+
+  function handleGuestAccess() {
+    localStorage.removeItem(SESSION_STORAGE_KEY)
+    setIsGuestSession(true)
+    setSession({
+      operadorId: 'guest',
+      usuario: 'invitado',
+      responsable: 'Invitado · Solo lectura',
+      telefono: '',
+      establecimientoId: '',
+      establecimientoNombre: 'Todos los establecimientos',
+    })
+    setActiveView('reportes')
   }
 
   function handleAdminIdentified(adminSession: CaiAdminSession) {
     localStorage.removeItem(SESSION_STORAGE_KEY)
+    setIsGuestSession(false)
     setSession(null)
     setAdminAuthError('')
     setAdminEmail(adminSession.email)
@@ -386,6 +409,7 @@ export function App() {
 
   function handleLogout() {
     localStorage.removeItem('sicofs_operador')
+    setIsGuestSession(false)
     setSession(null)
     setIsMobileMenuOpen(false)
   }
@@ -441,6 +465,7 @@ export function App() {
         <CaiIdentificacionForm
           onIdentified={handleIdentified}
           onAdminIdentified={handleAdminIdentified}
+          onGuestAccess={handleGuestAccess}
         />
       </>
     )
@@ -448,6 +473,7 @@ export function App() {
 
   const navigationProps: SidebarProps = {
     activeView,
+    isGuest: isGuestSession,
     onHome: handleHome,
     onOpenRegistration: handleOpenRegistration,
     onOpenReports: handleOpenReports,

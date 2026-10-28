@@ -23,6 +23,7 @@ type Establecimiento = Pick<
 type CaiIdentificacionFormProps = {
   onIdentified: (session: CaiSession) => void
   onAdminIdentified: (session: CaiAdminSession) => void
+  onGuestAccess: () => void
 }
 
 type AuthMode = 'login' | 'register' | 'admin'
@@ -47,7 +48,11 @@ function errorCode(error: unknown): string | undefined {
   return undefined
 }
 
-export function CaiIdentificacionForm({ onIdentified, onAdminIdentified }: CaiIdentificacionFormProps) {
+export function CaiIdentificacionForm({
+  onIdentified,
+  onAdminIdentified,
+  onGuestAccess,
+}: CaiIdentificacionFormProps) {
   const [establecimientos, setEstablecimientos] = useState<Establecimiento[]>([])
   const [mode, setMode] = useState<AuthMode>('login')
   const [nombreCompleto, setNombreCompleto] = useState('')
@@ -398,6 +403,14 @@ export function CaiIdentificacionForm({ onIdentified, onAdminIdentified }: CaiId
                   className="font-semibold text-cai-700 underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-cai-600"
                 >
                   Registrarse
+                </button>
+                {' o '}
+                <button
+                  type="button"
+                  onClick={onGuestAccess}
+                  className="font-semibold text-cai-700 underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-cai-600"
+                >
+                  Ingresar como Invitado
                 </button>
               </>
             ) : mode === 'register' ? (
