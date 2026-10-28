@@ -1564,7 +1564,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                       position="top"
                       formatter={(value: number) => value > 0 ? formatProductivityRate(value) : ''}
                       fill="#334155"
-                      fontSize={10}
+                      fontSize={12}
                       fontWeight={700}
                     />
                   </Bar>
@@ -1583,7 +1583,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                       position="top"
                       formatter={(value: number) => value > 0 ? formatProductivityRate(value) : ''}
                       fill="#334155"
-                      fontSize={10}
+                      fontSize={12}
                       fontWeight={700}
                     />
                   </Bar>
