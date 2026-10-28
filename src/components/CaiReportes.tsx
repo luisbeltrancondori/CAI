@@ -141,6 +141,17 @@ async function fetchAllPages<T>(
   }
 }
 
+function parseNumericValue(value: unknown): number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0
+  if (typeof value !== 'string') return 0
+
+  const normalized = value.trim().replace(/%/g, '').replace(/,/g, '.')
+  if (!normalized) return 0
+
+  const parsed = Number(normalized)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
 function asPercentage(value: number): number {
   return value <= 1 ? value * 100 : value
 }
@@ -502,7 +513,6 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
               .select('establecimiento_id, indicador_id, compromiso_gestion, poblacion_programada')
               .eq('gestion', gestion)
               .eq('indicador_id', indicadorId)
-            if (establecimientoId) query = query.eq('establecimiento_id', establecimientoId)
             return await query.range(from, to)
           })
         const loadRegistros = () =>
@@ -513,7 +523,6 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
               .eq('gestion', gestion)
               .lte('mes', 12)
               .in('indicador_id', indicadorIds)
-            if (establecimientoId) query = query.eq('establecimiento_id', establecimientoId)
             return await query.range(from, to)
           })
 
@@ -865,6 +874,38 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
     const highestValue = Math.max(highestCoverage, reporte.metaInstitucional ?? 0)
     return highestValue > 0 ? Math.ceil(highestValue / 10) * 10 : 100
   }, [hasRequiredSelection, isProductivityIndicator, isDropoutIndicator, reporte.rows, reporte.metaInstitucional])
+
+  const chartData = useMemo<ReporteEstablecimiento[]>(
+    () => reporte.rows.map((row) => {
+      const porcentajeJunio = parseNumericValue(row.porcentajeJunio)
+      const cobertura = parseNumericValue(row.cobertura)
+
+      return {
+        ...row,
+        nombre: String(row.nombre ?? ''),
+        poblacion: parseNumericValue(row.poblacion),
+        atendidos: parseNumericValue(row.atendidos),
+        primerSemestre: parseNumericValue(row.primerSemestre),
+        incrementoSegundoSemestre: parseNumericValue(row.incrementoSegundoSemestre),
+        incrementoAtendidos: parseNumericValue(row.incrementoAtendidos),
+        porcentajeJunio,
+        porcentajeIncremento: isProductivityIndicator
+          ? parseNumericValue(row.porcentajeIncremento)
+          : cobertura - porcentajeJunio,
+        cobertura,
+        meta: row.meta === null ? null : parseNumericValue(row.meta),
+        avanceMeta: row.avanceMeta === null ? null : parseNumericValue(row.avanceMeta),
+        brechaMeta: row.brechaMeta === null ? null : parseNumericValue(row.brechaMeta),
+        tasaProductividad: row.tasaProductividad === null
+          ? null
+          : parseNumericValue(row.tasaProductividad),
+        tasaDesercion: row.tasaDesercion === null
+          ? null
+          : parseNumericValue(row.tasaDesercion),
+      }
+    }),
+    [reporte.rows, isProductivityIndicator],
+  )
 
   const dropoutYAxisMin = useMemo(() => {
     if (!isDropoutIndicator) return 0
@@ -1330,7 +1371,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           <div className="h-[420px] w-full lg:h-[480px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
-                data={reporte.rows}
+                data={chartData}
                 margin={{ top: 30, right: isProductivityIndicator ? 190 : isDropoutIndicator ? 48 : 100, left: 4, bottom: 70 }}
                 barCategoryGap="28%"
               >
@@ -1479,7 +1520,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                     }}
                   />
                 )}
-                {isDropoutIndicator ? (
+                {isDropoutIndicator && (
                   <Bar
                     name={`Índice de ${dropoutName}`}
                     dataKey="tasaDesercion"
@@ -1488,16 +1529,12 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                     barSize={48}
                     maxBarSize={48}
                   >
-                    {reporte.rows.map((row) => (
+                    {chartData.map((row) => (
                       <Cell
                         key={row.id}
-                        fill={
-                          row.tasaDesercion === null
-                            ? '#94a3b8'
-                            : row.tasaDesercion < 0 || row.tasaDesercion >= 5
-                              ? '#dc2626'
-                              : '#16a34a'
-                        }
+                        fill={row.tasaDesercion === null || row.tasaDesercion < 0 || row.tasaDesercion >= 5
+                          ? '#dc2626'
+                          : '#16a34a'}
                       />
                     ))}
                     <LabelList
@@ -1510,70 +1547,107 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
                       pointerEvents="none"
                     />
                   </Bar>
-                ) : (
-                <>
-                <Bar
-                  name={firstSemesterChartLabel}
-                  dataKey="porcentajeJunio"
-                  stackId={isProductivityIndicator ? undefined : 'a'}
-                  fill="#2F6B3F"
-                  radius={[0, 0, 0, 0]}
-                  barSize={48}
-                  maxBarSize={48}
-                >
-                  <LabelList
+                )}
+                {!isDropoutIndicator && isProductivityIndicator && (
+                  <Bar
+                    name={firstSemesterChartLabel}
                     dataKey="porcentajeJunio"
-                    position="inside"
-                    formatter={(value: number) =>
-                      value > 0
-                        ? isProductivityIndicator
-                          ? formatProductivityRate(value)
-                          : formatPercentage(value)
-                        : ''
-                    }
-                    fill="#ffffff"
-                    fontSize={10}
-                    fontWeight={700}
-                    pointerEvents="none"
-                  />
-                </Bar>
-                <Bar
-                  name={incrementalLabel}
-                  dataKey="porcentajeIncremento"
-                  stackId={isProductivityIndicator ? undefined : 'a'}
-                  fill="#D32E3A"
-                  radius={[4, 4, 0, 0]}
-                  barSize={48}
-                  maxBarSize={48}
-                >
-                  <LabelList
+                    fill="#2F6B3F"
+                    radius={[4, 4, 0, 0]}
+                    barSize={48}
+                    maxBarSize={48}
+                  >
+                    <LabelList
+                      dataKey="porcentajeJunio"
+                      position="top"
+                      formatter={(value: number) => value > 0 ? formatProductivityRate(value) : ''}
+                      fill="#334155"
+                      fontSize={10}
+                      fontWeight={700}
+                    />
+                  </Bar>
+                )}
+                {!isDropoutIndicator && isProductivityIndicator && (
+                  <Bar
+                    name={incrementalLabel}
                     dataKey="porcentajeIncremento"
-                    position="inside"
-                    formatter={(value: number) =>
-                      value > 0
-                        ? isProductivityIndicator
-                          ? formatProductivityRate(value)
-                          : formatPercentage(value)
-                        : ''
-                    }
-                    fill="#ffffff"
-                    fontSize={10}
-                    fontWeight={700}
-                    pointerEvents="none"
-                  />
-                  {!isProductivityIndicator && (
+                    fill="#D32E3A"
+                    radius={[4, 4, 0, 0]}
+                    barSize={48}
+                    maxBarSize={48}
+                  >
+                    <LabelList
+                      dataKey="porcentajeIncremento"
+                      position="top"
+                      formatter={(value: number) => value > 0 ? formatProductivityRate(value) : ''}
+                      fill="#334155"
+                      fontSize={10}
+                      fontWeight={700}
+                    />
+                  </Bar>
+                )}
+                {!isDropoutIndicator && !isProductivityIndicator && (
+                  <Bar
+                    name="% Logrado a Junio"
+                    dataKey="porcentajeJunio"
+                    stackId="cobertura"
+                    fill="#2F6B3F"
+                    radius={[0, 0, 0, 0]}
+                    barSize={48}
+                    maxBarSize={48}
+                    isAnimationActive={false}
+                  >
+                    <LabelList
+                      dataKey="porcentajeJunio"
+                      position="inside"
+                      formatter={(value: number | null) =>
+                        value !== null && parseNumericValue(value) > 0.01
+                          ? formatPercentage(parseNumericValue(value))
+                          : ''
+                      }
+                      fill="#ffffff"
+                      fontSize={10}
+                      fontWeight={700}
+                      pointerEvents="none"
+                    />
+                  </Bar>
+                )}
+                {!isDropoutIndicator && !isProductivityIndicator && (
+                  <Bar
+                    name="Incremento % (Diferencia)"
+                    dataKey="porcentajeIncremento"
+                    stackId="cobertura"
+                    fill="#D32E3A"
+                    radius={[4, 4, 0, 0]}
+                    barSize={48}
+                    maxBarSize={48}
+                    isAnimationActive={false}
+                  >
+                    <LabelList
+                      dataKey="porcentajeIncremento"
+                      position="inside"
+                      formatter={(value: number | null) =>
+                        value !== null && parseNumericValue(value) > 0.01
+                          ? formatPercentage(parseNumericValue(value))
+                          : ''
+                      }
+                      fill="#ffffff"
+                      fontSize={10}
+                      fontWeight={700}
+                      pointerEvents="none"
+                    />
                     <LabelList
                       dataKey="cobertura"
                       position="top"
-                      formatter={(value: number) => formatPercentage(value)}
+                      formatter={(value: number | null) =>
+                        value === null ? '' : formatPercentage(parseNumericValue(value))
+                      }
                       fill="#334155"
                       fontSize={11}
                       fontWeight={700}
                       pointerEvents="none"
                     />
-                  )}
-                </Bar>
-                </>
+                  </Bar>
                 )}
               </BarChart>
             </ResponsiveContainer>
