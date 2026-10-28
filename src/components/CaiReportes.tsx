@@ -651,7 +651,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
       }
       if (productivityMode) {
         const registroHastaMes = registroRows.filter((item) => item.mes <= mes)
-        const registroPrimerSemestre = registroRows.filter((item) => item.mes <= 6)
+        const registroPrimerSemestre = registroRows.filter((item) => item.mes <= Math.min(mes, 6))
         const registroSegundoSemestre = registroHastaMes.filter((item) => item.mes > 6)
         const actividades = (items: RegistroMensual[]) =>
           items.reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
@@ -696,7 +696,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
         0,
       )
       const primerSemestre = registroRows
-        .filter((item) => item.mes <= 6)
+        .filter((item) => item.mes <= Math.min(mes, 6))
         .reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
       const atendidos = registroRows
         .filter((item) => item.mes <= mes)
@@ -772,7 +772,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
 
     if (productivityMode) {
       const registrosHastaMes = registros.filter((item) => item.mes <= mes)
-      const registrosPrimerSemestre = registros.filter((item) => item.mes <= 6)
+      const registrosPrimerSemestre = registros.filter((item) => item.mes <= Math.min(mes, 6))
       const registrosSegundoSemestre = registrosHastaMes.filter((item) => item.mes > 6)
       const actividades = (items: RegistroMensual[]) =>
         items.reduce((total, item) => total + Number(item.valor_numerador || 0), 0)
@@ -889,9 +889,11 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
         incrementoSegundoSemestre: parseNumericValue(row.incrementoSegundoSemestre),
         incrementoAtendidos: parseNumericValue(row.incrementoAtendidos),
         porcentajeJunio,
-        porcentajeIncremento: isProductivityIndicator
-          ? parseNumericValue(row.porcentajeIncremento)
-          : cobertura - porcentajeJunio,
+        porcentajeIncremento: mes <= 6
+          ? 0
+          : isProductivityIndicator
+            ? parseNumericValue(row.porcentajeIncremento)
+            : cobertura - porcentajeJunio,
         cobertura,
         meta: row.meta === null ? null : parseNumericValue(row.meta),
         avanceMeta: row.avanceMeta === null ? null : parseNumericValue(row.avanceMeta),
@@ -904,7 +906,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           : parseNumericValue(row.tasaDesercion),
       }
     }),
-    [reporte.rows, isProductivityIndicator],
+    [reporte.rows, isProductivityIndicator, mes],
   )
 
   const dropoutYAxisMin = useMemo(() => {
@@ -1177,7 +1179,7 @@ export function CaiReportes({ gestion = 2026 }: CaiReportesProps) {
           </label>
         </div>
         {hasRequiredSelection && selectedIndicator && (
-          <p className="mt-4 text-center text-sm font-bold uppercase text-slate-700">
+          <p className="mt-4 text-center text-sm font-bold uppercase text-slate-700" style={{ color: '#2F6B3F' }}>
             Indicador filtrado: {selectedIndicator.numero_indicador}. {selectedIndicator.descripcion}
           </p>
         )}
